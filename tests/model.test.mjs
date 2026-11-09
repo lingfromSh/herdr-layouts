@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   DONE_MARK, STATUSES, parseList, countsOf, totalsOf, projectName, matchesFolder,
   buildProjects, filterTasks, filterProjects, idOf, addArgs, statusArgs, boardOf, taskHint, lastLine,
+  agentBrief, pickAgent, launchArgs,
 } from "../mods/tsk/model.js";
 
 const task = (number, status, project, more = {}) =>
@@ -147,4 +148,36 @@ test("lastLine is the last non-empty line, so errors do not print a stack", () =
 
 test("STATUSES is attention-first, and every one is a tsk status", () => {
   assert.deepEqual(STATUSES, ["review", "blocked", "started", "ready", "open"]);
+});
+
+test("agentBrief names the task, its project, and how to hand it back", () => {
+  const brief = agentBrief(task(3, "open", "/w/app", { thread: "auth" }), "/w/app");
+  assert.match(brief, /^tsk task T3 \(auth\) — Task 3$/m);
+  assert.match(brief, /^Project: \/w\/app$/m);
+  assert.match(brief, /tsk status T3 review/);
+});
+
+test("pickAgent takes props.agent by key or name, falls back to the first installed, none turns it off", () => {
+  const agents = [
+    { key: "claude", name: "Claude Code", run: ["claude"], installed: false },
+    { key: "pi", name: "pi", run: ["pi"], installed: true },
+    { key: "codex", name: "Codex", run: ["codex"], installed: true },
+  ];
+  assert.equal(pickAgent(agents, "codex").key, "codex");
+  assert.equal(pickAgent(agents, "Codex").key, "codex");
+  assert.equal(pickAgent(agents, "clau").key, "pi", "an installed agent wins over a missing one");
+  assert.equal(pickAgent(agents, "").key, "pi");
+  assert.equal(pickAgent(agents, null).key, "pi");
+  assert.equal(pickAgent(agents, "none"), null);
+  assert.equal(pickAgent([{ key: "x", name: "x", run: [], installed: true }], ""), null);
+});
+
+test("launchArgs opens a tab in the task's project, running the agent with the brief", () => {
+  const t = task(9, "open", "/w/app", { thread: "db" });
+  const args = launchArgs(t, { key: "pi", name: "pi", run: ["pi", "--yolo"] });
+  assert.equal(args.name, "T9");
+  assert.equal(args.folder, "/w/app");
+  assert.deepEqual(args.argv, ["pi", "--yolo"]);
+  assert.match(args.task, /T9/);
+  assert.equal(launchArgs(task(9, "open", null), { run: ["pi"] }).folder, null);
 });

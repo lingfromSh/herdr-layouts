@@ -55,7 +55,10 @@ Colours are Herdr theme tokens only: `review` = `accent`, `blocked` = `blocked`,
   across all projects — so the count is visible with the panel closed.
 - Clicks: toggle button → hide/show the column; close icon → `layout.hide`; refresh icon → refetch now;
   `Board` → `tab.new` running `tsk` in that project's folder (its own cwd when the project is the desk);
-  a project header → fold/unfold; `Start` → `tsk status T<n> started`; `Done` → `tsk status T<n> done`;
+  a project header → fold/unfold; `Start` → `tsk status T<n> started`, then `tab.new {name: "T<n>", folder: the
+  task's project, argv: agent.run, task: the brief}` so a coding agent picks the task up in a new tab (its first
+  message is the brief: title, thread, project path, `tsk list --all --json`, and `tsk status T<n> review` at the
+  end); `Done` → `tsk status T<n> done`;
   both refetch on success and print the command's own error text on failure.
 - Typing: the filter narrows projects and tasks as you type; the capture input adds a task on Enter
   (`tsk add -t <title>`, plus `-p <path>` or `--desk`), and Escape clears the filter. The panel has no
@@ -85,13 +88,16 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
 `mods/tsk/` — one mod, two roles via `props.role`: `panel` (a `View`) and `toggle`.
 
 - `main.js` imports `herdr` and draws both. `herdr` calls: `exec`, `run`, `spaces`, `focused`, `home`,
-  `shared`, `setShared`, `theme`, `settings`, `layout`, `props`. Drawing uses `gpui-kit`
+  `knownAgents`, `shared`, `setShared`, `theme`, `settings`, `layout`, `props`. Drawing uses `gpui-kit`
   (`View`, `div`, `image`, `svg`) and `gpui-base` (`v_flex`, `h_flex`, `InputState`, `Input`).
   Commands it runs: `layout.toggle`, `layout.hide`, `tab.new`.
 - `model.js` has no Herdr imports: `LIST` (the two-command shell script), `PATHS` (prepends
   `~/.local/bin`, `~/go/bin`, `/opt/homebrew/bin`, `/usr/local/bin`), `parseList` (splits on the marker,
   parses both arrays), `buildProjects`, `totalsOf`, `filterTasks`, `filterProjects`, `idOf`,
-  `addArgs`, `statusArgs`, `boardOf`, `taskHint`.
+  `addArgs`, `statusArgs`, `boardOf`, `taskHint`, and for Start: `agentBrief`, `pickAgent`, `launchArgs`.
+- Which agent Start runs: `props.run` if the panel block carries one (an argv, e.g. `["pi"]`), else
+  `knownAgents()` (Herdr's list of agents with a `run`, most picked first) filtered to what is installed,
+  matched by `props.agent` (key or name) or else the first; `props.agent: "none"` makes Start status-only.
 - Programs it runs: `tsk list --all --json`, `tsk list --all --done --json`, `tsk add -t <title>
   [-p <path>|--desk]`, `tsk status T<n> started|done`, `tab.new {folder, argv:["tsk"]}`. Never the
   database; a non-zero exit prints the command's last stderr line.
@@ -120,14 +126,17 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
 - Editing a mod in place does not always reload it in a running window; a fresh folder name (or a restart)
   does. Install by copying — a symlinked mod is not picked up.
 - A mod reaches `exec`, so this layout runs `tsk` from your `PATH`; `tsk` missing shows the install hint in
-  the panel instead of an empty card.
+  the panel instead of an empty card. Start runs the agent from `agent.run`, so an agent Herdr cannot find
+  installed only marks the task started and says so in the notice — nothing is launched silently.
+- A tsk title is the agent's first message: keep titles self-contained, since the brief adds only the thread,
+  the project path and the hand-back line.
 - `tsk list --json` carries no steps progress, so rows show thread, assignee, block reason and review
   checks but no step count. `--all` reads the global store: tasks of projects with no open space still
   appear, just further down.
 
 ## Done when
 
-- `herdr-app check mods/tsk` prints `check passed: mods/tsk` and `node --test tests/` passes (16 tests).
+- `herdr-app check mods/tsk` prints `check passed: mods/tsk` and `node --test tests/` passes (19 tests).
 - `herdr-app do layout.switch '{"name":"herdr-work"}'` shows three columns: terminal, tsk, skillshare, with
   the two buttons at the right end of the tab bar and 8px of space after the last one.
 - The panel lists the project your active space sits in first, unfolded, with the rest below; the header
@@ -136,5 +145,6 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
 - `layout.hide {id:"tsk-panel"}` hides the column, the tab-bar button no longer looks selected, and its pill
   still shows the review + blocked count; `layout.toggle` brings the column back with fresh data at once.
 - `Start` on a row makes the task `started` in `tsk list --all --json` and in tsk's own board within the
-  next refresh; `Done` does the same for `done`. A capture like `Write the changelog` appears as a new task
-  in the current space's project.
+  next refresh, and opens a tab in the task's project running a coding agent whose first message is the
+  brief (title, thread, project folder, `tsk status T<n> review`); `Done` sets it `done`. A capture like
+  `Write the changelog` appears as a new task in the current space's project.

@@ -6,7 +6,9 @@ across every project and **skillshare**'s sync status — switched from the tab 
 ![herdr-work](preview.png)
 
 - **tsk column** — every task that waits on your review, is blocked, or is moving, grouped by project, with
-  the project your current space sits in first and unfolded. `Start` / `Done` / a capture input write through
+  the project your current space sits in first and unfolded. `Start` marks a task started **and runs a coding
+  agent on it** in a new tab of the task's project folder — the agent's first message is the task itself, and
+  it is told to hand the work back with `tsk status T<n> review`. `Done` and the capture input write through
   tsk's own CLI; the tab-bar button carries a badge with the review + blocked count, so you see it with the
   column closed.
 - **skillshare column** — [runkids/skillshare](https://github.com/runkids/skillshare)'s Herdr panel (skills,
@@ -102,6 +104,27 @@ tsk list --all --done --json
 - The capture input is `tsk add`: it lands in the current space's project, or on the desk without a match.
   The `□` on a project card opens tsk's own board with `tab.new {folder, argv: ["tsk"]}`.
 
+### Start runs an agent on the task
+
+`Start` (on an `open` or `ready` task) does two things: `tsk status T<n> started`, then a `tab.new` in the
+task's project folder whose `argv` is the agent and whose `task` is the brief — so Herdr starts the agent with
+the task as its first message. The brief is the title, the thread, the project path, a pointer to
+`tsk list --all --json`, and a closing `tsk status T<n> review` so the work comes back to your review strip.
+
+Which agent: `knownAgents()` — Herdr's own list of the agents installed on this machine, most picked first.
+Pin one in the layout instead:
+
+```json
+{ "id": "tsk", "type": "block",
+  "content": { "mod": "tsk", "props": { "agent": "codex" } } }   // by key or name
+{ "content": { "mod": "tsk", "props": { "run": ["pi"] } } }        // an exact argv
+{ "content": { "mod": "tsk", "props": { "agent": "none" } } }     // status only, no agent
+```
+
+Without a match the task is only marked started and the notice says so — nothing is silently launched.
+
+
+
 ### tsk across the projects you have open in Herdr
 
 The link is a path on both sides: Herdr knows space → `folder`, tsk knows task → `project` (absolute), and
@@ -134,7 +157,7 @@ preview.png               both columns open
 mods/tsk/main.js          the tsk column + the tab-bar button (the only file importing herdr)
 mods/tsk/model.js         tsk output → rows / projects / progress; add and status arguments
 mods/tsk/mark.svg         the mark; icons/ has the 16 stroke icons
-tests/model.test.mjs      16 tests
+tests/model.test.mjs      19 tests
 install.sh, Makefile      install, check, screenshot, pull the layout back from Herdr
 RECIPE.md                 the brief this layout was built from — read it before changing anything
 ```

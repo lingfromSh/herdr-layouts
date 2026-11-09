@@ -168,3 +168,31 @@ export function taskHint(task) {
   }
   return task.thread ? `#${task.thread}` : "";
 }
+
+/** The first message a coding agent gets when a task's Start is pressed. */
+export function agentBrief(task, projectPath) {
+  const where = task.project || projectPath || "";
+  return [
+    `tsk task T${task.number}${task.thread ? ` (${task.thread})` : ""} — ${task.title}`,
+    where ? `Project: ${where}` : "",
+    "The rest of the record is in tsk: `tsk list --all --json` (and `tsk help`).",
+    `Do the work, then hand it back for review: \`tsk status T${task.number} review\`.`,
+  ].filter(Boolean).join("\n");
+}
+
+/** Which agent to start: props.agent by key or name ("none" turns it off), else the most picked installed one. */
+export function pickAgent(agents, want) {
+  const list = (agents || []).filter((a) => a && a.installed && Array.isArray(a.run) && a.run.length > 0);
+  const w = String(want ?? "").trim().toLowerCase();
+  if (w === "none") return null;
+  if (!list.length) return null;
+  if (!w) return list[0];
+  return list.find((a) => String(a.key).toLowerCase() === w || String(a.name).toLowerCase() === w)
+    || list.find((a) => String(a.key).toLowerCase().includes(w) || String(a.name).toLowerCase().includes(w))
+    || list[0];
+}
+
+/** `tab.new` arguments that start `agent` on `task`, in the task's project folder. */
+export function launchArgs(task, agent) {
+  return { name: `T${task.number}`, folder: task.project || null, argv: agent.run, task: agentBrief(task) };
+}

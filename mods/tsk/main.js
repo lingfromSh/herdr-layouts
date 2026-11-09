@@ -7,10 +7,10 @@
 // the tab bar shows how many tasks wait on you even while the panel is hidden.
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { exec, run, spaces, focused, home, shared, setShared, theme, settings, layout, props as blockProps } from "herdr";
+import { exec, run, spaces, focused, home, knownAgents, shared, setShared, theme, settings, layout, props as blockProps } from "herdr";
 import {
   STATUSES, LABEL, LIST, PATHS, parseList, lastLine, buildProjects, totalsOf, filterTasks,
-  filterProjects, idOf, addArgs, statusArgs, boardOf, taskHint,
+  filterProjects, idOf, addArgs, statusArgs, boardOf, taskHint, pickAgent, launchArgs,
 } from "./model.js";
 
 const PANEL = "tsk-panel"; // the layout node the toggle shows and hides; hidden state is the layout's, so it survives space switches
@@ -118,6 +118,7 @@ export default class Tsk extends View {
     this.loadedAt = 0;
     this.loading = false;
     this.token = 0; // execs from before an action are stale: their token no longer matches
+    this.agents = null; // knownAgents() once: the coding agents Start may run
     this.expanded = new Set();
     this.openTask = null;
     this.notice = null;
@@ -220,6 +221,38 @@ export default class Tsk extends View {
       const r = await tsk(statusArgs(task.number, status));
       this.say(r.code === 0 ? "ok" : "warn",
         r.code === 0 ? `T${task.number} ${LABEL[status]}` : lastLine(r.stderr) || `tsk status exited ${r.code}`, cx);
+      cx.notify();
+      this.refresh(cx);
+    });
+  }
+
+  /** The agent Start runs: props.run (an argv, e.g. ["pi"]), else props.agent by key or name, else the most picked installed one. */
+  async agentNow() {
+    const p = blockProps() || {};
+    if (Array.isArray(p.run) && p.run.length > 0) {
+      return { key: String(p.run[0]), name: String(p.run[0]), run: p.run };
+    }
+    if (!this.agents) this.agents = await knownAgents().catch(() => []);
+    return pickAgent(this.agents, p.agent);
+  }
+
+  /** Start: tsk says started, then a coding agent picks it up in a tab of this space, on the task. */
+  startTask(task, cx) {
+    cx.spawn(async (cx) => {
+      const r = await tsk(statusArgs(task.number, "started"));
+      if (r.code !== 0) {
+        this.say("warn", lastLine(r.stderr) || `tsk status exited ${r.code}`, cx);
+        cx.notify();
+        this.refresh(cx);
+        return;
+      }
+      const agent = await this.agentNow();
+      if (!agent) {
+        this.say("ok", `T${task.number} started · no coding agent found (set props.agent)`, cx);
+      } else {
+        run("tab.new", launchArgs(task, agent));
+        this.say("ok", `T${task.number} started · ${agent.name} is on it`, cx);
+      }
       cx.notify();
       this.refresh(cx);
     });
@@ -363,7 +396,7 @@ export default class Tsk extends View {
         .child(div().flex_1().min_w(0).truncate().text_size(S().label).text_color(t.muted).child(hint || LABEL[task.status]))
         .when(task.status !== "done", (el) => el
           .when(task.status === "open" || task.status === "ready", (el) => el.child(secondary(`start-${this.idOf(task.id)}`, "Start", t,
-            (_e, cx) => this.move(task, "started", cx), { h: 22, px: 7, size: S().label })))
+            (_e, cx) => this.startTask(task, cx), { h: 22, px: 7, size: S().label })))
           .child(secondary(`done-${this.idOf(task.id)}`, "Done", t, (_e, cx) => this.move(task, "done", cx), { h: 22, px: 7, size: S().label })))));
   }
 
