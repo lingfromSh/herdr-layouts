@@ -274,18 +274,24 @@ export default class Tsk extends View {
         .on_click(() => run("layout.hide", { id: PANEL })).child(icon("close", 13, t.muted))));
   }
 
-  /** The whole portfolio in one line: what waits on you, what is moving, what is done. */
+  /**
+   * What waits on you and what is moving, in one line. Three chips at most and the
+   * row clips: a 324px panel has no room for every status, and the cards carry the rest.
+   */
   strip(t, totals) {
-    const chips = STATUSES.filter((s) => totals[s] > 0).map((s) => {
-      const loud = s === "review" || s === "blocked";
-      return h_flex().gap(4).items_center()
-        .child(dot(STATUS_COLOR(t, s), 6))
-        .child(div().text_size(S().label).text_color(loud ? STATUS_COLOR(t, s) : t.muted)
-          .child(`${totals[s]} ${LABEL[s]}`));
-    });
-    return h_flex().flex_none().px(12).pt(8).pb(6).gap(10).items_center()
-      .child(h_flex().flex_1().gap(9).items_center().children(chips))
-      .child(div().text_size(S().label).text_color(t.muted).child(`${totals.done || this.done} done`));
+    const shown = ["review", "blocked", "started"].filter((s) => totals[s] > 0);
+    const chips = shown.length
+      ? shown.map((s) => {
+        const loud = s === "review" || s === "blocked";
+        return h_flex().flex_none().gap(4).items_center()
+          .child(dot(STATUS_COLOR(t, s), 6))
+          .child(div().text_size(S().label).text_color(loud ? STATUS_COLOR(t, s) : t.muted)
+            .child(`${totals[s]} ${LABEL[s]}`));
+      })
+      : [div().text_size(S().label).text_color(t.muted).child("nothing needs you")];
+    return h_flex().flex_none().h(26).px(12).gap(10).items_center()
+      .child(h_flex().flex_1().min_w(0).overflow_hidden().gap(9).items_center().children(chips))
+      .child(div().flex_none().text_size(S().label).text_color(t.muted).child(`${totals.done || this.done} done`));
   }
 
   tools(t) {

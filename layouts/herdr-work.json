@@ -120,6 +120,10 @@
                 "px": 108
               }
             }
+          ],
+          "padding": [
+            0,
+            8
           ]
         },
         {
@@ -192,7 +196,7 @@
               "id": "tsk-panel",
               "type": "column",
               "size": {
-                "px": 324
+                "px": 330
               },
               "min": 260,
               "max": 620,
@@ -210,7 +214,7 @@
               "id": "skillshare-panel",
               "type": "column",
               "size": {
-                "px": 372
+                "px": 340
               },
               "min": 300,
               "max": 720,

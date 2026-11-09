@@ -1,137 +1,140 @@
-# RECIPE — herdr-work 为什么长这样
+# herdr-work
 
-给未来改这个布局的人（包括我自己）。这里只写「构建做了什么、为什么」，不写用法 —— 用法在 `README.md`。
+Herdr's `main` layout with two columns added beside the terminal: tsk's task progress across every
+tsk project (what waits on your review, what is blocked, what is moving) and skillshare's sync status.
+Both columns are switched from the tab bar, so a narrow window can drop them without losing them.
 
-## 一句话
+![herdr-work](preview.png)
 
-`main` 布局 + 一个 tsk 面板列 + 一个 skillshare 面板列 + 顶栏两个开关。别的不动。
+## What you see
 
-## 为什么是「克隆 main + 加列」而不是从零写
+Left to right, the window is still `main`'s:
 
-Herdr 的布局是一棵节点树，节点只有 `row / column / block` 三种，能做的事就那些：
-`{id, size:{px|weight}, min, max, hidden, background, border, radius, padding, gap, divider, resizable, window_drag, floating}`。
-只有根节点能写 `titlebar / traffic_lights / preview / theme / colors / font`。
+- **Sidebar** (`px 268`, `min 44`, `max 480`, not resizable): brand, `spaces`, `agents`, footer — untouched
+  from `main`. Narrowed under 160px it becomes the numbered rail that `main` ships.
+- **Work column** (not resizable), three rows: the tab bar, the body, the status bar.
+- **Tab bar row** (`px 42`, not resizable, `padding [0, 8]`): the tabs strip (`weight 1`, keeps
+  `window_drag`) then two fixed buttons — `tsk-toggle` (`px 74`) and `skillshare-toggle` (`px 108`).
+  Each is the same mod as its panel with `"props": {"role": "toggle"}`: a 26px-high rounded button with
+  the mod's mark, the name at 12px, and a count pill when something needs you. The 8px right padding is
+  what keeps the last button off the window edge.
+- **Body row** (`row`, `padding 8`, `gap 8`): the active tab's terminals, `main`'s hidden
+  files/changes `panel` (`px 368`, `min 280`, `max 900`, `hidden`), `tsk-panel` (`px 330`, `min 260`,
+  `max 620`), `skillshare-panel` (`px 340`, `min 300`, `max 720`).
+- **Status bar** (`px 28`), unchanged.
 
-所以任何「在现有桌面上加一块」的需求，正确答案都是 `layout.clone`：
+The tsk column is a card: white surface, 10px radius, 1px border, one column of:
 
-```bash
-herdr-app do layout.clone '{"name":"main","as":"herdr-work"}'
-```
+- header: `tsk` mark, the word `tsk`, the subtitle `3 projects · 7 live`, a refresh icon and a close icon;
+- a strip of at most three chips — `review`, `blocked`, `started` — each a 6px dot plus `1 review`, with
+  review and blocked in their status colour and started in muted; `nothing needs you` when empty; the count
+  of finished tasks (`1 done`) pinned right;
+- a filter input (`Filter tasks`) and a `Board` button;
+- one card per project: name, `4 live · 1 done`, a progress bar (one colour segment per status, done
+  at half opacity), the attention pills (`1 review`, `1 blocked`), and the tasks — `T3` in the status
+  colour, the title, then thread/assignee chips when set; clicking a task unfolds `why blocked`,
+  `review: 2/3 checks`, `dispatch …`, the last activity line and `Start` / `Done`;
+- a capture input at the bottom: `new task → aurora-api`, placeholder `New task — Enter adds it`.
 
-克隆会写进 `cloned_from:{name:"main",version:"0.1.14"}`，Herdr 的布局列表拿它做「派生自」的标注。
-之后改 JSON 就是改她的副本，`main` 以后怎么变都不会把这份改回去 —— 代价是 `main` 的升级要手动跟。
-跟的办法：重新 clone 一份、把下面两段补回去，或者 `make pull` 把线上那份拉回仓库对比。
+Colours are Herdr theme tokens only: `review` = `accent`, `blocked` = `blocked`, `started` = `working`,
+`ready` = `done`, `open` = `muted`, `done` = `dim`. Type sizes derive from `settings().ui_font_size`
+(title +1, body +0.5, secondary −0.5, label −1).
 
-## 三处改动
+## How it behaves
 
-### 1. 顶栏变成一行：tabs + 两个开关
+- On mount, and every 20s, the panel runs one `exec`: `tsk list --all --json`, a `@@tsk-done@@` marker,
+  then `tsk list --all --done --json`. Refreshes are skipped while the panel node is hidden and run
+  immediately when it is shown again.
+- Grouping: projects hold tasks; a project is "the current one" when any open space's folder
+  (or the focused terminal's cwd) is that path or inside it. The current project sorts first and unfolds
+  by itself on the first load; everything else follows sorted by how much needs you, then total, then name.
+  Projects with no live task are dropped unless an open space sits in them; tasks in the done view mark
+  `1 done` and never show as rows.
+- The tab-bar button toggles the layout node: `layout.toggle {id: "tsk-panel"}` /
+  `layout.toggle {id: "skillshare-panel"}`. Its pill reads `shared("tsk.attention")` — review plus blocked
+  across all projects — so the count is visible with the panel closed.
+- Clicks: toggle button → hide/show the column; close icon → `layout.hide`; refresh icon → refetch now;
+  `Board` → `tab.new` running `tsk` in that project's folder (its own cwd when the project is the desk);
+  a project header → fold/unfold; `Start` → `tsk status T<n> started`; `Done` → `tsk status T<n> done`;
+  both refetch on success and print the command's own error text on failure.
+- Typing: the filter narrows projects and tasks as you type; the capture input adds a task on Enter
+  (`tsk add -t <title>`, plus `-p <path>` or `--desk`), and Escape clears the filter. The panel has no
+  keys of its own and ships no `keys.json`; everything else is Herdr's.
+- Nothing moves on its own except the progress bars (they follow `tsk`'s data) and the pill count.
 
-`main` 里 `tabs` 是一个 `px 42` 的 block，直接坐在 `work` 这一列里。要往同一行加东西，就得把它包进一个 row，
-否则每加一个兄弟节点，`work` 会把它们竖着排下去。
+## Built from
 
-```json
-{ "id": "tabs-row", "type": "row", "size": { "px": 42 }, "resizable": false, "children": [
-  { "id": "tabs", "type": "block", "size": { "weight": 1 }, "window_drag": true, "content": { "mod": "tabs" } },
-  { "id": "tsk-toggle", "type": "block", "size": { "px": 74 }, "content": { "mod": "tsk", "props": { "role": "toggle" } } },
-  { "id": "skillshare-toggle", "type": "block", "size": { "px": 108 }, "content": { "mod": "skillshare", "props": { "role": "toggle" } } }
-] }
-```
-
-- `weight: 1` 给 tabs，另外两个 `px` 固定：开关不该跟着窗口宽度变胖。
-- `window_drag: true` 留在 tabs 上，顶部那一条仍然能拖窗口。
-- `resizable: false`：这一行是 chrome，不是工作区，不给拖。
-
-`props.role` 是 mod 自己的约定：`role:"toggle"` 的实例只画一个按钮，点它就是 `layout.toggle {id:"<panel>"}`。
-一个 mod 两种形态，省得为一个按钮再写一个 mod —— skillshare 的 herdr mod 也是这么干的（`role` 缺省是面板）。
-
-### 2. 面板放在 `work-body`，不放在每个 space 的 `panel` 栈里
-
-这是整件事最关键的一条，值得抄在墙上：
-
-> Herdr 的 tabs 模块按 **space** 还原 `panel` 栈。把面板放进那个栈，切个 space 面板就没了。
-
-`main` 的 `panel`（px 368，`hidden: true`）就是这么一个栈，里面是 files/changes。布局节点的 `hidden` 不一样，
-它是**布局点击**（`layout.hide / layout.show / layout.toggle`）留下的状态，Herdr 跨 space、跨重启都保留。
-所以新面板一律是 `work-body` 的直接子节点：
-
-```json
-{ "id": "tsk-panel", "type": "column", "size": { "px": 324 }, "min": 260, "max": 620,
-  "children": [ { "id": "tsk", "type": "block", "content": { "mod": "tsk" } } ] }
-```
-
-外面那层 `column` 不是多余的：它才是可拖宽度的那个节点（`min/max` + 缺省 `resizable`），
-里面的 `block` 被它撑满。直接给 block 写 `px` 也能显示，但拖不动。
-
-宽度怎么定的：1920 的屏上 `main` 还剩 ~1070px，够放 board；再窄（<1440）就建议关掉一列。
-`skillshare-panel` 默认可见 —— 这个布局的卖点就是三件事并排；不想看见就点顶栏那个开关，Herdr 记得住。
-
-### 3. tsk 用原生面板，不嵌 TUI
-
-`tsk` 自己带一个全屏 board（crossterm TUI）。把它塞进 `terminal` block 也能用，但那样侧栏就成了一个终端：
-点它得先给焦点、看的是 80 列的 ASCII、每 20 秒还得担心 TUI 重绘。侧栏要的是三行摘要。
-
-于是走 `--json`：
-
-```sh
-tsk list --all --json
-printf "\n@@tsk-done@@\n"      # done 是另一个视图，一次 exec 里跑两遍，用一个标记切开
-tsk list --all --done --json
-```
-
-一次 `exec` 而不是两次：Herdr 的 `exec` 是一次进程调用，两次就要两个 await + 两个错误分支，
-而且两次之间数据可能已经变了。代价是要解析两段 JSON，`parseList` 就是干这个的（切标记、各自 `JSON.parse`、
-状态归一化、数字化 `number`）。
-
-要知道但不用改的事：
-
-- `--all` 走的是 tsk 的全局库，所以**没有开 space 的项目也在里面**。排序把「当前 space 命中」的顶到前面就够了，
-  过滤掉反而会看不见手边就有的活。
-- `tsk list` 的 `--json` 里没有 steps 进度，行里只放 `thread` / `assignee` / `block` / `review`。
-- 写操作只有三个，全走 CLI：`add -t`、`status T<n> started`、`status T<n> done`。不碰 tsk 的库。
-  退出码 0 才算成功，1（refusal）/2（usage）/3（storage）把 stderr 原文贴出来 —— tsk 的报错比我们能编的好。
-- 想开 board 就 `tab.new {folder}` —— 在项目的**正确目录**里开，省掉 `cd`；tsk 只看得到 cwd 往上找到的项目。
-
-## 数据流
+Node tree in `layouts/herdr-work.json`, a `layout.clone` of `main` 0.1.14 (`cloned_from` records it):
 
 ```
-space.folder ─┐
-focused.cwd  ─┴→ openFolders() ─┐
-                                ├→ buildProjects(live, done, folders) → 排序/展开/进度
-tsk list --all --json ──────────┤
-(@@tsk-done@@) tsk list …--done ┘
-                                        ↓
-                    totalsOf() → strip 那行 / shared("tsk.attention") → 顶栏角标
+root (row, titlebar none, traffic_lights [12,16])   ← from main
+├── sidebar (column px 268)                          ← from main
+└── work (column, resizable false)                   ← from main
+    ├── tabs-row (row px 42, resizable false, padding [0,8])   ← new wrapper
+    │   ├── tabs          (block weight 1, window_drag, mod "tabs")
+    │   ├── tsk-toggle    (block px 74,  mod "tsk",       props {role:"toggle"})
+    │   └── skillshare-toggle (block px 108, mod "skillshare", props {role:"toggle"})
+    ├── work-body (row, padding 8, gap 8)            ← from main, children added
+    │   ├── main        (block, the active tab's terminals)
+    │   ├── panel       (column px 368, hidden)      ← from main, files/changes
+    │   ├── tsk-panel   (column px 330, min 260, max 620) [block mod "tsk"]
+    │   └── skillshare-panel (column px 340, min 300, max 720) [block mod "skillshare"]
+    └── status (px 28)                               ← from main
 ```
 
-- 20 秒轮询，`layout.hide` 期间跳过（`find(layout(),"tsk-panel").hidden`），重新显示时立刻刷一次。
-- 首屏只自动展开「当前 space 命中」的项目；之后展开状态归用户，刷新不覆盖。
-- `shared("tsk.attention")` 是给开关按钮用的：面板关着也知道有几条在 review/blocked。
+`mods/tsk/` — one mod, two roles via `props.role`: `panel` (a `View`) and `toggle`.
 
-## 改的时候注意
+- `main.js` imports `herdr` and draws both. `herdr` calls: `exec`, `run`, `spaces`, `focused`, `home`,
+  `shared`, `setShared`, `theme`, `settings`, `layout`, `props`. Drawing uses `gpui-kit`
+  (`View`, `div`, `image`, `svg`) and `gpui-base` (`v_flex`, `h_flex`, `InputState`, `Input`).
+  Commands it runs: `layout.toggle`, `layout.hide`, `tab.new`.
+- `model.js` has no Herdr imports: `LIST` (the two-command shell script), `PATHS` (prepends
+  `~/.local/bin`, `~/go/bin`, `/opt/homebrew/bin`, `/usr/local/bin`), `parseList` (splits on the marker,
+  parses both arrays), `buildProjects`, `totalsOf`, `filterTasks`, `filterProjects`, `idOf`,
+  `addArgs`, `statusArgs`, `boardOf`, `taskHint`.
+- Programs it runs: `tsk list --all --json`, `tsk list --all --done --json`, `tsk add -t <title>
+  [-p <path>|--desk]`, `tsk status T<n> started|done`, `tab.new {folder, argv:["tsk"]}`. Never the
+  database; a non-zero exit prints the command's last stderr line.
+- Art: `mark.svg` (the tsk check mark) and 16 stroke icons in `icons/` (`refresh`, `close`, `search`,
+  `chevron-*`, `folder`, `desk`, `thread`, `bot`, `alert`, `check`, `plus`, `terminal`). No images, no
+  network calls beyond `exec`.
+- The skillshare column is someone else's mod, unmodified: `runkids/skillshare`'s `herdr/skillshare`.
 
-- **QuickJS**：`??` 不能和 `||`/`&&` 直接混用（要加括号），`node --check` 不报，`herdr-app check` 报。
-  改完 `make check`。
-- 视图里不许 `setShared` / `cx.notify`（渲染中被拒）；要改状态就 `later(cx, …)`。
-- `.child(null)` 会炸；用 `.children([…].filter(Boolean))` 或 `.when()`。
-- 不要留着 `cx` 到回调之外。
-- 颜色只用 `theme()` 的 token；`S()` 的字号从 `settings().ui_font_size` 推，别写死 px。
-- 装 mod **必须复制**进 `~/.config/herdr-app/mods/`，软链热加载不到。
-- 元素 id 里带路径要过一遍 `idOf()`（路径有 `/`），否则会撞 id。
+## Watch out
 
-## 想加的变体
+- **Do not put these panels in `main`'s `panel` stack.** The `tabs` mod rebuilds that stack per space, so a
+  column added there disappears on a space switch. A layout node's own `hidden` is a layout click: it
+  survives space switches and restarts.
+- Give the *wrapping column* the `size` / `min` / `max`, never the inner block — the column is what drags,
+  the block just fills it. `padding` on a `row` pads both sides (`[vertical, horizontal]`), which is how
+  the tab bar gets its 8px right margin without shifting the tabs strip.
+- Width budget at 1920: `main` will not go much under ~1150px, so `268 (full sidebar) + 1150 + 330 + 340`
+  overflows and the last column is pushed off-screen. It fits with the sidebar rail (76px) or with narrower
+  columns; below 1440 hide one column. Trying to shrink `main` instead does nothing.
+- **QuickJS**: `??` may not mix with `||` or `&&` without parentheses — `node --check` accepts it,
+  `herdr-app check` does not. Run `make check`.
+- No `setShared` or `cx.notify()` during render; state changes go through `later(cx, …)` or a spawn.
+  `.child(null)` throws — use `.children([…].filter(Boolean))` or `.when()`.
+- Element ids carry project paths and task ids, so they go through `idOf()`; the same id twice in one tree
+  is a bug.
+- Editing a mod in place does not always reload it in a running window; a fresh folder name (or a restart)
+  does. Install by copying — a symlinked mod is not picked up.
+- A mod reaches `exec`, so this layout runs `tsk` from your `PATH`; `tsk` missing shows the install hint in
+  the panel instead of an empty card.
+- `tsk list --json` carries no steps progress, so rows show thread, assignee, block reason and review
+  checks but no step count. `--all` reads the global store: tasks of projects with no open space still
+  appear, just further down.
 
-- **只想要 tsk**：删掉 `skillshare-toggle` / `skillshare-panel` 两个节点，`tsk-panel` 宽度调到 420。
-- **换成第三个面板**：照抄 `tsk-panel` 那一段，`id` 换掉，`content.mod` 换成目标 mod（前提它支持 `role:"toggle"` 或你不用开关）。
-- **不想要 desk**：`buildProjects` 里 `desk: !row.project` 的项目就是 desk 组，直接 `if (p.desk) return false`。
-- **看全部（含 done-only 的项目）**：`buildProjects(live, done, folders, {showDoneOnly:true})`。
+## Done when
 
-## 验证
-
-```bash
-make test                                  # model.js，无需 Herdr
-make check                                 # + herdr-app check mods/tsk
-herdr-app do layout.switch '{"name":"herdr-work"}'
-herdr-app shot layouts/herdr-work.png      # 截图进仓库
-```
-
-`preview.png` 是真人窗口的截图，不是设计稿 —— 里面是真实项目名，换人用之前记得换掉数据或重拍。
+- `herdr-app check mods/tsk` prints `check passed: mods/tsk` and `node --test tests/` passes (16 tests).
+- `herdr-app do layout.switch '{"name":"herdr-work"}'` shows three columns: terminal, tsk, skillshare, with
+  the two buttons at the right end of the tab bar and 8px of space after the last one.
+- The panel lists the project your active space sits in first, unfolded, with the rest below; the header
+  subtitle counts projects and live tasks; the strip shows review/blocked/started chips that fit inside the
+  column.
+- `layout.hide {id:"tsk-panel"}` hides the column, the tab-bar button no longer looks selected, and its pill
+  still shows the review + blocked count; `layout.toggle` brings the column back with fresh data at once.
+- `Start` on a row makes the task `started` in `tsk list --all --json` and in tsk's own board within the
+  next refresh; `Done` does the same for `done`. A capture like `Write the changelog` appears as a new task
+  in the current space's project.
