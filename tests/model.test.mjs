@@ -84,7 +84,7 @@ test("a space in a sub-folder still owns its project, a sibling does not", () =>
 });
 
 test("projectName is the last folder; the desk has none", () => {
-  assert.equal(projectName("/Users/ling/w/app/"), "app");
+  assert.equal(projectName("/Users/example/w/app/"), "app");
   assert.equal(projectName(null), "desk");
 });
 
@@ -105,17 +105,17 @@ test("filterTasks matches title, thread, assignee and T number", () => {
 
 test("filterProjects keeps a project when its name or one of its tasks matches", () => {
   const projects = buildProjects([
-    task(1, "open", "/w/astrolabe", { title: "portal migration" }),
+    task(1, "open", "/w/webapp", { title: "portal migration" }),
     task(2, "open", "/w/lumos-vault", { title: "index notes" }),
   ], [], []);
   assert.equal(filterProjects(projects, "").length, 2);
-  assert.deepEqual(filterProjects(projects, "portal").map((p) => p.name), ["astrolabe"]);
+  assert.deepEqual(filterProjects(projects, "portal").map((p) => p.name), ["webapp"]);
   assert.deepEqual(filterProjects(projects, "LUMOS").map((p) => p.name), ["lumos-vault"]);
   assert.deepEqual(filterProjects(projects, "nothing"), []);
 });
 
 test("idOf strips what an element id may not hold", () => {
-  assert.equal(idOf("/Users/ling/w/app"), "-Users-ling-w-app");
+  assert.equal(idOf("/Users/example/w/app"), "-Users-example-w-app");
   assert.equal(idOf("15fec2dd-f640-4794"), "15fec2dd-f640-4794");
 });
 
@@ -128,8 +128,8 @@ test("the two moves the panel offers build the right arguments", () => {
 
 test("the board tab is named after its project and opens where tsk scopes it", () => {
   const project = { path: "/w/app", name: "app", desk: false };
-  assert.deepEqual(boardOf(project, "/Users/ling"), { name: "tsk app", folder: "/w/app" });
-  assert.deepEqual(boardOf({ path: null, name: "desk", desk: true }, "/Users/ling"), { name: "tsk desk", folder: "/Users/ling" });
+  assert.deepEqual(boardOf(project, "/Users/example"), { name: "tsk app", folder: "/w/app" });
+  assert.deepEqual(boardOf({ path: null, name: "desk", desk: true }, "/Users/example"), { name: "tsk desk", folder: "/Users/example" });
 });
 
 test("taskHint says what waits: a block's reason, review checks, else the thread", () => {
