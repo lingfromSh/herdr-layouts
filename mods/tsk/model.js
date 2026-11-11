@@ -120,6 +120,55 @@ export function totalsOf(projects) {
   return sum;
 }
 
+// ---- Status changes: what a desktop notification is about ----
+
+/** id → status for every task in this poll: live and done alike. */
+export function snapshotOf(tasks) {
+  const seen = {};
+  for (const t of tasks) if (t.id) seen[t.id] = t.status;
+  return seen;
+}
+
+/** Tasks whose status moved since `seen`. One nobody had seen yet is not a change, so a first poll is quiet. */
+export function changedTasks(seen, tasks) {
+  const out = [];
+  if (!seen) return out;
+  for (const t of tasks) {
+    const was = seen[t.id];
+    if (was && was !== t.status) out.push({ task: t, from: was, to: t.status });
+  }
+  return out;
+}
+
+/** More than this many moves in one poll arrive as one counted banner, not a stack of them. */
+export const ALERTS_MAX = 3;
+
+/** The banners for a poll's changes: one per task, or a single summary when a batch landed. */
+export function alertPlan(changes) {
+  if (!changes || !changes.length) return [];
+  if (changes.length > ALERTS_MAX) {
+    const counts = {};
+    for (const c of changes) counts[c.to] = (counts[c.to] || 0) + 1;
+    const body = [...STATUSES, "done"].filter((s) => counts[s]).map((s) => `${counts[s]} ${LABEL[s]}`).join(" · ");
+    return [{ title: `tsk · ${changes.length} changed`, body }];
+  }
+  return changes.map((c) => ({
+    title: `tsk · ${LABEL[c.to] || c.to}`,
+    body: `${c.task.project ? projectName(c.task.project) : "desk"} · T${c.task.number} ${c.task.title}`,
+  }));
+}
+
+/**
+ * The osascript behind one macOS banner. It goes through System Events: an Apple-signed app
+ * may post notifications, while a bare `display notification` from a script is dropped
+ * silently on current macOS. `sound` is a system sound name ("Glass"), none by default.
+ */
+export function notifyScript(title, body, sound) {
+  const q = (s) => String(s ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const part = sound ? ` sound name "${q(sound)}"` : "";
+  return `tell application "System Events" to display notification "${q(body)}" with title "${q(title)}"${part}`;
+}
+
 /** Tasks matching a filter: title, thread, assignee, or its T number. */
 export function filterTasks(tasks, query) {
   const q = String(query ?? "").trim().toLowerCase();

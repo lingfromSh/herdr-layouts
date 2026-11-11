@@ -43,8 +43,12 @@ Colours are Herdr theme tokens only: `review` = `accent`, `blocked` = `blocked`,
 ## How it behaves
 
 - On mount, and every 20s, the panel runs one `exec`: `tsk list --all --json`, a `@@tsk-done@@` marker,
-  then `tsk list --all --done --json`. Refreshes are skipped while the panel node is hidden and run
-  immediately when it is shown again.
+  then `tsk list --all --done --json`. The 20s timer keeps running while the panel node is hidden — that is
+  exactly when a status change should reach you — and a refetch runs immediately when it is shown again.
+- Every poll is diffed against the previous one and each task whose status changed posts one macOS banner:
+  `tsk · <status>` over `<project> · T<n> <title>`, batched into `tsk · N changed` past three. The first
+  poll only records a baseline, so opening Herdr never replays old news, and moves the panel made itself are
+  written into the baseline before the refetch so your own `Start` / `Done` click never notifies you.
 - Grouping: projects hold tasks; a project is "the current one" when any open space's folder
   (or the focused terminal's cwd) is that path or inside it. The current project sorts first and unfolds
   by itself on the first load; everything else follows sorted by how much needs you, then total, then name.
@@ -94,12 +98,14 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
 - `model.js` has no Herdr imports: `LIST` (the two-command shell script), `PATHS` (prepends
   `~/.local/bin`, `~/go/bin`, `/opt/homebrew/bin`, `/usr/local/bin`), `parseList` (splits on the marker,
   parses both arrays), `buildProjects`, `totalsOf`, `filterTasks`, `filterProjects`, `idOf`,
-  `addArgs`, `statusArgs`, `boardOf`, `taskHint`, and for Start: `agentBrief`, `pickAgent`, `launchArgs`.
+  `addArgs`, `statusArgs`, `boardOf`, `taskHint`, for Start: `agentBrief`, `pickAgent`, `launchArgs`, and
+  for the banner: `snapshotOf`, `changedTasks`, `alertPlan` (with `ALERTS_MAX = 3`), `notifyScript`.
 - Which agent Start runs: `props.run` if the panel block carries one (an argv, e.g. `["pi"]`), else
   `knownAgents()` (Herdr's list of agents with a `run`, most picked first) filtered to what is installed,
   matched by `props.agent` (key or name) or else the first; `props.agent: "none"` makes Start status-only.
 - Programs it runs: `tsk list --all --json`, `tsk list --all --done --json`, `tsk add -t <title>
-  [-p <path>|--desk]`, `tsk status T<n> started|done`, `tab.new {folder, argv:["tsk"]}`. Never the
+  [-p <path>|--desk]`, `tsk status T<n> started|done`, `tab.new {folder, argv:["tsk"]}`, and
+  `osascript -e 'tell application "System Events" to display notification …'` for a banner. Never the
   database; a non-zero exit prints the command's last stderr line.
 - Art: `mark.svg` (the tsk check mark) and 16 stroke icons in `icons/` (`refresh`, `close`, `search`,
   `chevron-*`, `folder`, `desk`, `thread`, `bot`, `alert`, `check`, `plus`, `terminal`). No images, no
@@ -133,10 +139,19 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
 - `tsk list --json` carries no steps progress, so rows show thread, assignee, block reason and review
   checks but no step count. `--all` reads the global store: tasks of projects with no open space still
   appear, just further down.
+- Banners must go through **System Events**: a bare `osascript -e 'display notification …'` is dropped
+  silently on current macOS (no banner, no permission prompt, nothing in `com.apple.ncprefs`), and an
+  unsigned notifier such as `terminal-notifier` is refused outright. `tell application "System Events" to
+  display notification` works because System Events is Apple-signed and posts on the script's behalf. The
+  first banner therefore asks for **Automation** permission (let Herdr control System Events); denied, the
+  panel still works and is simply quiet. macOS only — the panel itself is not.
+- A banner needs the mod to be running, which happens the first time the column is shown in this app run:
+  hide it afterwards and alerts keep coming, never show it and nothing polls. `props.notify: false` mutes
+  them, `props.sound: "Glass"` adds a system sound (silent by default).
 
 ## Done when
 
-- `herdr-app check mods/tsk` prints `check passed: mods/tsk` and `node --test tests/` passes (19 tests).
+- `herdr-app check mods/tsk` prints `check passed: mods/tsk` and `node --test tests/` passes (23 tests).
 - `herdr-app do layout.switch '{"name":"herdr-work"}'` shows three columns: terminal, tsk, skillshare, with
   the two buttons at the right end of the tab bar and 8px of space after the last one.
 - The panel lists the project your active space sits in first, unfolded, with the rest below; the header
@@ -148,3 +163,5 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
   next refresh, and opens a tab in the task's project running a coding agent whose first message is the
   brief (title, thread, project folder, `tsk status T<n> review`); `Done` sets it `done`. A capture like
   `Write the changelog` appears as a new task in the current space's project.
+- With the column hidden and another app in front, `tsk status T<n> review` in a terminal raises a banner
+  within one poll (`tsk · review` / `<project> · T<n> <title>`); pressing `Start` in the panel does not.

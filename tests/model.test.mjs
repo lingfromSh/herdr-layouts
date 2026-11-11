@@ -5,6 +5,7 @@ import {
   DONE_MARK, STATUSES, parseList, countsOf, totalsOf, projectName, matchesFolder,
   buildProjects, filterTasks, filterProjects, idOf, addArgs, statusArgs, boardOf, taskHint, lastLine,
   agentBrief, pickAgent, launchArgs,
+  snapshotOf, changedTasks, alertPlan, notifyScript,
 } from "../mods/tsk/model.js";
 
 const task = (number, status, project, more = {}) =>
@@ -180,4 +181,41 @@ test("launchArgs opens a tab in the task's project, running the agent with the b
   assert.deepEqual(args.argv, ["pi", "--yolo"]);
   assert.match(args.task, /T9/);
   assert.equal(launchArgs(task(9, "open", null), { run: ["pi"] }).folder, null);
+});
+
+test("changedTasks reports moves only: a first poll and an unseen task stay quiet", () => {
+  const before = snapshotOf([task(1, "started", "/w/app"), task(2, "open", "/w/app")]);
+  assert.deepEqual(before, { id1: "started", id2: "open" });
+  assert.deepEqual(changedTasks(null, [task(1, "review", "/w/app")]), [], "no baseline, no news");
+
+  const changes = changedTasks(before, [
+    task(1, "review", "/w/app"), task(2, "open", "/w/app"), task(3, "started", "/w/app"),
+  ]);
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].task.number, 1);
+  assert.equal(changes[0].from, "started");
+  assert.equal(changes[0].to, "review");
+});
+
+test("a task closed in tsk reads as a move to done, because done rows carry that status", () => {
+  const seen = snapshotOf([task(4, "started", "/w/app")]);
+  const changes = changedTasks(seen, [task(4, "done", "/w/app")]);
+  assert.deepEqual(changes.map((c) => [c.task.number, c.to]), [[4, "done"]]);
+});
+
+test("alertPlan: one banner per move, one counted banner when a batch lands", () => {
+  assert.deepEqual(alertPlan([]), []);
+  const one = alertPlan([{ task: task(12, "review", "/w/app", { title: "Fix login" }), to: "review" }]);
+  assert.deepEqual(one, [{ title: "tsk · review", body: "app · T12 Fix login" }]);
+  assert.equal(alertPlan([{ task: task(5, "open", null), to: "started" }])[0].body, "desk · T5 Task 5");
+
+  const many = [1, 2, 3, 4].map((n) => ({ task: task(n, "review", "/w/app"), to: n > 3 ? "done" : "review" }));
+  assert.deepEqual(alertPlan(many), [{ title: "tsk · 4 changed", body: "3 review · 1 done" }]);
+});
+
+test("notifyScript quotes the text, goes through System Events, and adds a sound only when asked", () => {
+  assert.equal(notifyScript("tsk · review", 'app · T1 say "hi" \\ bye'),
+    'tell application "System Events" to display notification "app · T1 say \\"hi\\" \\\\ bye" with title "tsk · review"');
+  assert.match(notifyScript("t", "b", "Glass"), / sound name "Glass"$/);
+  assert.doesNotMatch(notifyScript("t", "b", null), /sound name/);
 });

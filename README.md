@@ -10,14 +10,15 @@ across every project and **skillshare**'s sync status — switched from the tab 
   agent on it** in a new tab of the task's project folder — the agent's first message is the task itself, and
   it is told to hand the work back with `tsk status T<n> review`. `Done` and the capture input write through
   tsk's own CLI; the tab-bar button carries a badge with the review + blocked count, so you see it with the
-  column closed.
+  column closed, and a task that changes status while you are elsewhere raises a macOS banner.
 - **skillshare column** — [runkids/skillshare](https://github.com/runkids/skillshare)'s Herdr panel (skills,
   agents, MCP, plugins, hooks), same toggle, unmodified.
 - Both columns are **layout nodes**, not entries in `main`'s per-space `panel` stack: Herdr's tabs mod rebuilds
   that stack for every space, while a layout node's hidden state is a layout click — it survives space switches
   and restarts.
 
-**中文速览**：在 Herdr 的 `main` 窗口上加两列 —— 左边 tsk 的任务进度（当前 space 的项目排最前，可 `Start`/`Done`/加任务），
+**中文速览**：在 Herdr 的 `main` 窗口上加两列 —— 左边 tsk 的任务进度（当前 space 的项目排最前，可 `Start`/`Done`/加任务，
+任务状态一变就弹 macOS 桌面通知），
 右边 skillshare 的同步状态，两列都能从顶栏开关。面板放在**布局节点**里而不是每个 space 自己的 `panel` 栈里，所以切 space 不会
 丢。装法：`./install.sh`，然后 `layout.switch`。
 
@@ -93,7 +94,8 @@ printf "\n@@tsk-done@@\n"
 tsk list --all --done --json
 ```
 
-- Refetched every 20s, skipped while the column is hidden, immediate when it comes back.
+- Refetched every 20s — also while the column is hidden, because that is when a banner is worth most — and
+  immediately when it comes back.
 - Rows group by project: **the project your active space's folder is (or is inside) sorts first and unfolds**;
   the rest follow by how much needs you, then total, then name. Projects with no live task stay hidden unless
   a space is open in them.
@@ -123,6 +125,28 @@ Pin one in the layout instead:
 
 Without a match the task is only marked started and the notice says so — nothing is silently launched.
 
+### A task that moves raises a desktop notification
+
+Every poll is diffed against the one before it, and each task whose status changed gets one macOS banner:
+`tsk · review` / `started` / `done` / `blocked` / `ready` / `open`, with `project · T<n> title` under it. That
+covers the two cases the column exists for — an agent hands work back for review, and a task is closed — as
+well as anything else that moves in the store, whether it moved in the panel or in a terminal.
+
+- More than three moves in one poll arrive as a single counted banner (`tsk · 4 changed`, `3 review · 1 done`)
+  rather than a stack.
+- Moves the panel made itself (`Start`, `Done`) are written into the baseline before the refetch, so pressing a
+  button never notifies you about your own click. A move made in tsk's CLI does.
+- The first poll after the mod starts only sets the baseline: opening Herdr never replays old news.
+- The banner goes out as `osascript -e 'tell application "System Events" to display notification …'` — a plain
+  `display notification` is dropped silently by current macOS. The first banner asks for **Automation**
+  permission (let Herdr control System Events); refusing it leaves the panel otherwise unchanged, just silent.
+- Knobs, in the panel block's props: `{ "notify": false }` turns banners off, `{ "sound": "Glass" }` adds a
+  system sound (silent by default).
+
+Two limits: banners need the panel's mod running, which starts the first time the column shows in this app run —
+hide it afterwards and alerts keep coming, never show it and there is nothing to poll; and this is macOS-only
+(`osascript`), the panel itself is not.
+
 
 
 ### tsk across the projects you have open in Herdr
@@ -145,8 +169,8 @@ make test     # node --test tests/  —— model.js, no Herdr needed
 make check    # + herdr-app check mods/tsk (QuickJS rules node does not catch)
 ```
 
-`model.js` imports nothing from `herdr`: parsing, grouping, sorting and argument building live there.
-`main.js` is views only.
+`model.js` imports nothing from `herdr`: parsing, grouping, sorting, argument building and the banner text live
+there. `main.js` is views only.
 
 ## Files
 
@@ -155,9 +179,9 @@ layouts/herdr-work.json   the layout (a clone of main 0.1.14)
 layouts/herdr-work.png    its screenshot
 preview.png               both columns open
 mods/tsk/main.js          the tsk column + the tab-bar button (the only file importing herdr)
-mods/tsk/model.js         tsk output → rows / projects / progress; add and status arguments
+mods/tsk/model.js         tsk output → rows / projects / progress; add and status arguments; banner text
 mods/tsk/mark.svg         the mark; icons/ has the 16 stroke icons
-tests/model.test.mjs      19 tests
+tests/model.test.mjs      23 tests
 install.sh, Makefile      install, check, screenshot, pull the layout back from Herdr
 RECIPE.md                 the brief this layout was built from — read it before changing anything
 ```

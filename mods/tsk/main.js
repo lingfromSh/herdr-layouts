@@ -1,6 +1,7 @@
 // tsk beside your agents: every tsk project's progress at a glance — what waits on your review,
 // what is blocked, what is moving — with the current space's project first, and one keystroke to
-// start a task, finish it, or open tsk's own board in a tab.
+// start a task, finish it, or open tsk's own board in a tab. A task that changes status while you
+// are elsewhere raises a macOS notification.
 //
 // Roles (props.role): the panel (default), and "toggle", the tab-bar button that shows or hides
 // the layout's "tsk-panel" node. The toggle reads the shared attention count the panel writes, so
@@ -11,6 +12,7 @@ import { exec, run, spaces, focused, home, knownAgents, shared, setShared, theme
 import {
   STATUSES, LABEL, LIST, PATHS, parseList, lastLine, buildProjects, totalsOf, filterTasks,
   filterProjects, idOf, addArgs, statusArgs, boardOf, taskHint, pickAgent, launchArgs,
+  snapshotOf, changedTasks, alertPlan, notifyScript,
 } from "./model.js";
 
 const PANEL = "tsk-panel"; // the layout node the toggle shows and hides; hidden state is the layout's, so it survives space switches
@@ -108,7 +110,8 @@ function toggle() {
 
 export default class Tsk extends View {
   init(_props, cx) {
-    this.role = (blockProps() || {}).role || "panel";
+    const given = blockProps() || {};
+    this.role = given.role || "panel";
     if (this.role === "toggle") return;
 
     this.handle = cx.focus_handle();
@@ -126,17 +129,18 @@ export default class Tsk extends View {
     this.query = "";
     this.wasHidden = false;
     this.refreshed = false;
+    this.seen = null; // id → status of the last poll: the baseline a banner is a change against
+    this.alertOn = given.notify !== false; // props.notify: false keeps the panel quiet
+    this.sound = given.sound ? String(given.sound) : null; // props.sound: a macOS sound name
 
     this.filter = InputState.new({ placeholder: "Filter tasks" });
     this.filter.on("change", (_e, cx) => { this.query = this.filter.value(); cx.notify(); });
     this.capture = InputState.new({ placeholder: "New task — Enter adds it" });
     this.capture.on("submit", (_e, cx) => this.addTask(cx));
 
-    const hidden = () => {
-      const node = find(layout(), PANEL);
-      return Boolean(node && node.hidden);
-    };
-    cx.timer.every(POLL, (cx) => { if (!this.loading && !hidden()) this.refresh(cx); });
+    // The panel keeps polling while its column is hidden: a task that moves to review is
+    // exactly the news you want with the column closed.
+    cx.timer.every(POLL, (cx) => { if (!this.loading) this.refresh(cx); });
   }
 
   // ---- Data ----
@@ -160,6 +164,7 @@ export default class Tsk extends View {
         this.done = parsed.done.length;
         this.loadedAt = Date.now();
         this.refreshed = true;
+        this.alertsFor(parsed.live.concat(parsed.done));
         if (!this.expanded.size) {
           // First look: unfold whatever the open spaces are working in.
           for (const p of this.projects) if (p.active) this.expanded.add(this.keyOf(p));
@@ -176,6 +181,24 @@ export default class Tsk extends View {
     const f = focused();
     if (f && f.cwd) folders.push(f.cwd);
     return folders;
+  }
+
+  /**
+   * One desktop banner per status move since the last poll. Done tasks arrive in the done list,
+   * not as a status change in the live one, so both lists are the baseline.
+   */
+  alertsFor(tasks) {
+    const seen = this.seen;
+    this.seen = snapshotOf(tasks);
+    if (!seen || !this.alertOn) return;
+    for (const a of alertPlan(changedTasks(seen, tasks))) {
+      exec("osascript", ["-e", notifyScript(a.title, a.body, this.sound)]).catch(() => {});
+    }
+  }
+
+  /** A move the panel made itself is not news: record it so the next poll sees no change. */
+  expect(task, status) {
+    if (this.seen) this.seen[task.id] = status;
   }
 
   keyOf(project) { return project.desk ? DESK : project.path; }
@@ -219,6 +242,7 @@ export default class Tsk extends View {
   move(task, status, cx) {
     cx.spawn(async (cx) => {
       const r = await tsk(statusArgs(task.number, status));
+      if (r.code === 0) this.expect(task, status);
       this.say(r.code === 0 ? "ok" : "warn",
         r.code === 0 ? `T${task.number} ${LABEL[status]}` : lastLine(r.stderr) || `tsk status exited ${r.code}`, cx);
       cx.notify();
@@ -246,6 +270,7 @@ export default class Tsk extends View {
         this.refresh(cx);
         return;
       }
+      this.expect(task, "started");
       const agent = await this.agentNow();
       if (!agent) {
         this.say("ok", `T${task.number} started · no coding agent found (set props.agent)`, cx);
