@@ -106,19 +106,6 @@
               "size": {
                 "px": 74
               }
-            },
-            {
-              "id": "skillshare-toggle",
-              "type": "block",
-              "content": {
-                "mod": "skillshare",
-                "props": {
-                  "role": "toggle"
-                }
-              },
-              "size": {
-                "px": 108
-              }
             }
           ],
           "padding": [
@@ -206,24 +193,6 @@
                   "type": "block",
                   "content": {
                     "mod": "tsk"
-                  }
-                }
-              ]
-            },
-            {
-              "id": "skillshare-panel",
-              "type": "column",
-              "size": {
-                "px": 340
-              },
-              "min": 300,
-              "max": 720,
-              "children": [
-                {
-                  "id": "skillshare",
-                  "type": "block",
-                  "content": {
-                    "mod": "skillshare"
                   }
                 }
               ]

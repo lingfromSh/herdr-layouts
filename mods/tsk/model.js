@@ -15,6 +15,35 @@ tsk list --all --done --json`;
 /** Installers put tsk in ~/.local/bin; an exec's PATH need not have it. */
 export const PATHS = 'PATH="$HOME/.local/bin:$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export PATH';
 
+// ---- How often the panel refetches ----
+
+/** The refresh choices in the panel's strip. 0 never polls; the refresh button still works. */
+export const INTERVALS = [
+  { ms: 0, label: "off" },
+  { ms: 5000, label: "5s" },
+  { ms: 15000, label: "15s" },
+  { ms: 60000, label: "1m" },
+  { ms: 300000, label: "5m" },
+];
+export const DEFAULT_POLL = 15000;
+
+/** A stored choice, a layout prop, or the default, read as ms: a label ("off", "5s", "1m") or a number. */
+export function parsePoll(value, fallback = DEFAULT_POLL) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const text = String(value).trim().toLowerCase();
+  const named = INTERVALS.find((i) => i.label === text);
+  if (named) return named.ms;
+  const ms = Number(text);
+  if (!isFinite(ms) || ms < 0) return fallback;
+  return Math.round(ms);
+}
+
+/** The chip label for an interval: the named one, else its seconds. */
+export function pollLabel(ms) {
+  const hit = INTERVALS.find((i) => i.ms === ms);
+  return hit ? hit.label : `${Math.round(Number(ms || 0) / 1000)}s`;
+}
+
 export function lastLine(text) {
   const lines = String(text ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
   return lines.length ? lines[lines.length - 1] : "";
@@ -140,34 +169,29 @@ export function changedTasks(seen, tasks) {
   return out;
 }
 
-/** More than this many moves in one poll arrive as one counted banner, not a stack of them. */
+/** More than this many moves in one refetch arrive as one counted notice, not a stack of them. */
 export const ALERTS_MAX = 3;
 
-/** The banners for a poll's changes: one per task, or a single summary when a batch landed. */
+/** The notices for a refetch's changes: one per task, or a single summary when a batch landed. */
 export function alertPlan(changes) {
   if (!changes || !changes.length) return [];
   if (changes.length > ALERTS_MAX) {
     const counts = {};
     for (const c of changes) counts[c.to] = (counts[c.to] || 0) + 1;
     const body = [...STATUSES, "done"].filter((s) => counts[s]).map((s) => `${counts[s]} ${LABEL[s]}`).join(" · ");
-    return [{ title: `tsk · ${changes.length} changed`, body }];
+    return [{ title: `tsk · ${changes.length} changed`, body, level: "info" }];
   }
   return changes.map((c) => ({
     title: `tsk · ${LABEL[c.to] || c.to}`,
     body: `${c.task.project ? projectName(c.task.project) : "desk"} · T${c.task.number} ${c.task.title}`,
+    level: levelOf(c.to),
   }));
 }
 
-/**
- * The osascript behind one macOS banner. It goes through System Events: an Apple-signed app
- * may post notifications, while a bare `display notification` from a script is dropped
- * silently on current macOS. `sound` is a system sound name ("Glass"), none by default.
- */
-export function notifyScript(title, body, sound) {
-  const q = (s) => String(s ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const part = sound ? ` sound name "${q(sound)}"` : "";
-  return `tell application "System Events" to display notification "${q(body)}" with title "${q(title)}"${part}`;
-}
+/** A notice's weight: a block needs an answer, a done task is good news. */
+const levelOf = (status) => ({
+  blocked: "error", review: "warning", done: "success",
+}[status] || "info");
 
 /** Tasks matching a filter: title, thread, assignee, or its T number. */
 export function filterTasks(tasks, query) {
@@ -198,6 +222,12 @@ export function addArgs(title, project) {
 
 /** `tsk status` arguments: `started` and `done` are the two moves the panel offers. */
 export const statusArgs = (number, status) => ["status", `T${number}`, status];
+
+/**
+ * `tsk archive` arguments: off every working view, number and status kept. tsk has no delete on the
+ * command line, so this is the panel's "remove": `tsk unarchive T<n>` puts the task straight back.
+ */
+export const archiveArgs = (number) => ["archive", `T${number}`];
 
 /** The board tab for a project: its name, and the folder tsk opens it in. */
 export function boardOf(project, home) {
@@ -245,3 +275,109 @@ export function pickAgent(agents, want) {
 export function launchArgs(task, agent) {
   return { name: `T${task.number}`, folder: task.project || null, argv: agent.run, task: agentBrief(task) };
 }
+
+// ---- The agent's terminal, found again by the label hc was given ----
+
+/** The label every terminal Start opens carries, and the one the panel reads back. */
+export const taskLabel = (number) => `T${number}`;
+
+/**
+ * `hc --name`: lowercase letters, digits, `-` and `_`, and not shaped like a terminal id —
+ * `T12` is refused as uppercase and `t12` as an id, so the name is `tsk-12`.
+ */
+export const taskName = (number) => `tsk-${number}`;
+
+/**
+ * `hc run` arguments for a task's agent: a background terminal that outlives both this
+ * process and the terminal it was started from, labeled so the panel finds it again, and
+ * adopted into `space`/`tab` when Herdr knows them.
+ */
+export function hcRunArgs({ task, argv, brief, folder, space, tab }) {
+  const args = ["run", "--bg", "--json", "--no-parent", "--keep", "--name", taskName(task.number),
+    "--label", `tsk=${taskLabel(task.number)}`];
+  if (space && tab) args.push("--label", `herdr.space=${space}`, "--label", `herdr.tab=${tab}`);
+  if (folder) args.push("--cwd", folder);
+  args.push("--");
+  for (const arg of argv || []) args.push(String(arg));
+  if (brief) args.push(String(brief));
+  return args;
+}
+
+/**
+ * `hc` reports failures as one JSON object on stderr (`{"error":{"message":…,"hint":…}}`), which
+ * reads as noise in a notice: show the message, with the hint after it. Anything else is the last line.
+ */
+export function hcError(text) {
+  const raw = String(text || "").trim();
+  const last = raw.split("\n").pop() || "";
+  if (last.startsWith("{")) {
+    try {
+      const error = JSON.parse(last).error;
+      if (error && error.message) return error.hint ? `${error.message} (${error.hint})` : String(error.message);
+    } catch (e) {
+      // not JSON after all: the last line is the message
+    }
+  }
+  return lastLine(raw);
+}
+
+/** The terminal record without the fields the panel never reads. */
+const terminalOf = (row) => ({
+  address: String(row.address || ""),
+  agent: String(row.agent || ""),
+  cwd: row.cwd ? String(row.cwd) : null,
+  state: String(row.state || ""),
+  status: row.status ? String(row.status) : null,
+  name: row.name ? String(row.name) : "",
+  title: row.title ? String(row.title) : "",
+  where: row.labels && row.labels.where ? String(row.labels.where) : "",
+  program: row.program
+    ? {
+      key: String(row.program.key || ""),
+      name: String(row.program.name || ""),
+      icon: row.program.icon ? String(row.program.icon) : "",
+      tint: Boolean(row.program.tint),
+    }
+    : null,
+});
+
+/**
+ * Who runs the task, in the app's own words: the program's name (`Pi`), its key (`pi`), then the
+ * record's agent or terminal name. Empty when the task has no terminal.
+ */
+export function agentName(term) {
+  if (!term) return "";
+  const p = term.program || {};
+  return p.name || p.key || term.agent || term.name || "";
+}
+
+/**
+ * Where it runs, as herdr-core already labels it: `Fosun Work / 1` is space / tab. `hc run` is given
+ * `herdr.space` and `herdr.tab`, and the core turns them into that label on the terminal itself.
+ */
+export const whereLabel = (term) => (term && term.where ? term.where : "");
+
+/** `Pi · Fosun Work / 1`: the agent and the tab it sits in, for the row that explains a task. */
+export function whoLine(term) {
+  return [agentName(term), whereLabel(term)].filter(Boolean).join(" \u00b7 ");
+}
+
+/**
+ * The task's agent terminal out of Herdr's live `terminals()`: a running one carrying the
+ * label wins, then a running one named after the task (a launch that never got its label),
+ * then the leftover of an earlier run. Null when the task never had one.
+ */
+export function taskTerminal(task, terminals) {
+  const rows = Array.isArray(terminals) ? terminals.filter(Boolean) : [];
+  const labeled = (r) => r.labels && r.labels.tsk === taskLabel(task.number);
+  const named = (r) => r.name === taskName(task.number);
+  const live = (r) => r.state === "live";
+  const found = rows.find((r) => labeled(r) && live(r))
+    || rows.find((r) => named(r) && live(r))
+    || rows.find(labeled)
+    || rows.find(named);
+  return found ? terminalOf(found) : null;
+}
+
+/** A terminal that is still running. `--keep` leaves a finished one listed, never live. */
+export const isLive = (term) => Boolean(term) && term.state === "live";

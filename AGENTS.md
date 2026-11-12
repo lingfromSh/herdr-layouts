@@ -3,9 +3,9 @@
 A Herdr desktop layout plus the one mod it needs. Herdr runs mods in QuickJS with its own UI kit;
 none of this is part of Herdr's Go build.
 
-- `layouts/herdr-work.json` is a `layout.clone` of `main`, with a `tabs-row` carrying two toggles and two
-  panel columns (`tsk-panel`, `skillshare-panel`) appended to `work-body`. `RECIPE.md` explains why each
-  node is there; `README.md` is the user-facing side. Keep all three in step with the code.
+- `layouts/herdr-work.json` is a `layout.clone` of `main`, with a `tabs-row` carrying one toggle and one
+  panel column (`tsk-panel`) appended to `work-body`. `RECIPE.md` explains why each node is there;
+  `README.md` is the user-facing side. Keep all three in step with the code.
 - `mods/tsk/main.js` is the only file that imports `herdr`. `mods/tsk/model.js` takes no Herdr functions,
   so `node --test tests/` covers it without the app: parsing, grouping, sorting, argument building.
   Put new logic in `model.js` and a test; keep `main.js` to views.

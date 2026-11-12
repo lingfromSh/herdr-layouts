@@ -56,14 +56,6 @@ if [ -f "$here/layouts/herdr-work.png" ]; then
   copy "$here/layouts/herdr-work.png" "$app_home/layouts/herdr-work.png"
 fi
 
-# The layout also carries skillshare's toggle and panel; without that mod the block stays empty.
-if [ ! -d "$app_home/mods/skillshare" ]; then
-  say ""
-  say "note: the skillshare mod is not installed. The layout's skillshare toggle stays empty."
-  say "      Install it from https://github.com/runkids/skillshare/tree/main/herdr/skillshare,"
-  say "      or delete the skillshare-toggle / skillshare-panel nodes from the layout."
-fi
-
 if [ -z "$dry" ] && command -v herdr-app >/dev/null 2>&1; then
   if herdr-app check "$app_home/mods/tsk" >/dev/null 2>&1; then
     say ""

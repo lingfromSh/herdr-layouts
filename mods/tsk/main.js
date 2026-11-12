@@ -1,24 +1,30 @@
 // tsk beside your agents: every tsk project's progress at a glance — what waits on your review,
 // what is blocked, what is moving — with the current space's project first, and one keystroke to
-// start a task, finish it, or open tsk's own board in a tab. A task that changes status while you
-// are elsewhere raises a macOS notification.
+// start a task, finish it, archive it, or open tsk's own board in a tab. An agent Start runs keeps
+// its terminal address in `hc`'s labels, so the panel shows whether it is still working and walks
+// you back to it. A task that changes status while you are elsewhere raises a notification.
 //
 // Roles (props.role): the panel (default), and "toggle", the tab-bar button that shows or hides
 // the layout's "tsk-panel" node. The toggle reads the shared attention count the panel writes, so
 // the tab bar shows how many tasks wait on you even while the panel is hidden.
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { exec, run, spaces, focused, home, knownAgents, shared, setShared, theme, settings, layout, props as blockProps } from "herdr";
+import {
+  exec, run, hc, spaces, focused, home, knownAgents, shared, setShared, theme, settings, layout,
+  terminals, notify, playSound, props as blockProps,
+} from "herdr";
 import {
   STATUSES, LABEL, LIST, PATHS, parseList, lastLine, buildProjects, totalsOf, filterTasks,
-  filterProjects, idOf, addArgs, statusArgs, boardOf, taskHint, pickAgent, launchArgs,
-  snapshotOf, changedTasks, alertPlan, notifyScript,
+  filterProjects, idOf, addArgs, statusArgs, archiveArgs, boardOf, taskHint, pickAgent, launchArgs, agentBrief, hcError,
+  agentName, whereLabel, whoLine,
+  snapshotOf, changedTasks, alertPlan, INTERVALS, parsePoll, hcRunArgs, taskTerminal, isLive,
 } from "./model.js";
 
 const PANEL = "tsk-panel"; // the layout node the toggle shows and hides; hidden state is the layout's, so it survives space switches
 const ATTENTION = "tsk.attention"; // shared: tasks in review or blocked, for the tab-bar badge
 const DESK = "·desk"; // the expanded-set key for tasks that belong to no project
-const POLL = 20000, NOTICE_MS = 5000;
+const POLL_KEY = "tsk.poll"; // localStorage: the interval this panel last used
+const NOTICE_MS = 5000;
 
 // ---- Running tsk ----
 
@@ -41,6 +47,13 @@ function S() {
 // ---- Look (Herdr theme tokens only) ----
 
 const icon = (name, size, color) => svg(`mods/tsk/icons/${name}.svg`).size(size).flex_none().text_color(color);
+
+// The agent's own icon from Herdr's program table (π for pi), falling back to a terminal glyph.
+const programIcon = (term, size, color) => {
+  const p = term && term.program;
+  if (!p || !p.icon) return icon("terminal", size, color);
+  return p.tint ? svg(p.icon).size(size).flex_none().text_color(color) : image(p.icon).w(size).h(size).flex_none();
+};
 const stop = (_e, cx) => cx.stop_propagation();
 const dot = (color, size = 8) => div().w(size).h(size).flex_none().rounded_full().bg(color);
 
@@ -129,18 +142,32 @@ export default class Tsk extends View {
     this.query = "";
     this.wasHidden = false;
     this.refreshed = false;
-    this.seen = null; // id → status of the last poll: the baseline a banner is a change against
+    this.seen = null; // id → status of the last refetch: the baseline a notice is a change against
     this.alertOn = given.notify !== false; // props.notify: false keeps the panel quiet
     this.sound = given.sound ? String(given.sound) : null; // props.sound: a macOS sound name
+
+    this.terminals = []; // Herdr's live core terminals: an agent Start ran is found here by its label
+
+    let stored = null;
+    try { stored = localStorage.getItem(POLL_KEY); } catch (_e) { stored = null; }
+    this.poll = parsePoll(stored !== null ? stored : given.poll); // props.poll as the default
+    this.lastPoll = 0;
 
     this.filter = InputState.new({ placeholder: "Filter tasks" });
     this.filter.on("change", (_e, cx) => { this.query = this.filter.value(); cx.notify(); });
     this.capture = InputState.new({ placeholder: "New task — Enter adds it" });
     this.capture.on("submit", (_e, cx) => this.addTask(cx));
 
-    // The panel keeps polling while its column is hidden: a task that moves to review is
-    // exactly the news you want with the column closed.
-    cx.timer.every(POLL, (cx) => { if (!this.loading) this.refresh(cx); });
+    // Refetching: the strip's chips set how often, and "off" leaves only the refresh button, a
+    // refetch when the column comes back, and the one after a write.
+    cx.spawn(async (cx) => {
+      for (;;) {
+        await cx.sleep(1000);
+        if (!this.poll || this.loading) continue;
+        if (Date.now() - this.lastPoll < this.poll) continue;
+        this.refresh(cx);
+      }
+    });
   }
 
   // ---- Data ----
@@ -148,6 +175,7 @@ export default class Tsk extends View {
   refresh(cx) {
     if (this.loading) return;
     this.loading = true;
+    this.lastPoll = Date.now();
     const token = ++this.token;
     cx.spawn(async (cx) => {
       const r = await sh(LIST);
@@ -162,6 +190,7 @@ export default class Tsk extends View {
         this.error = parsed.error;
         this.projects = buildProjects(parsed.live, parsed.done, this.openFolders());
         this.done = parsed.done.length;
+        this.attachTerminals();
         this.loadedAt = Date.now();
         this.refreshed = true;
         this.alertsFor(parsed.live.concat(parsed.done));
@@ -175,6 +204,17 @@ export default class Tsk extends View {
     });
   }
 
+  /**
+   * Each task's agent terminal, out of Herdr's live core list: the label `hc run` was given, or
+   * the task's name. Live data, so this costs no second poll and needs no state file.
+   */
+  attachTerminals() {
+    let rows = [];
+    try { rows = terminals() || []; } catch (_e) { rows = []; }
+    this.terminals = rows;
+    for (const p of this.projects) for (const task of p.tasks) task.term = taskTerminal(task, rows);
+  }
+
   /** Folders the open spaces sit in: a project holding one is the current one. */
   openFolders() {
     const folders = spaces().map((s) => s.folder).filter(Boolean);
@@ -184,7 +224,7 @@ export default class Tsk extends View {
   }
 
   /**
-   * One desktop banner per status move since the last poll. Done tasks arrive in the done list,
+   * One notification per status move since the last refetch. Done tasks arrive in the done list,
    * not as a status change in the live one, so both lists are the baseline.
    */
   alertsFor(tasks) {
@@ -192,8 +232,9 @@ export default class Tsk extends View {
     this.seen = snapshotOf(tasks);
     if (!seen || !this.alertOn) return;
     for (const a of alertPlan(changedTasks(seen, tasks))) {
-      exec("osascript", ["-e", notifyScript(a.title, a.body, this.sound)]).catch(() => {});
+      notify({ title: a.title, body: a.body, level: a.level });
     }
+    if (this.sound) playSound(this.sound);
   }
 
   /** A move the panel made itself is not news: record it so the next poll sees no change. */
@@ -250,6 +291,21 @@ export default class Tsk extends View {
     });
   }
 
+  /**
+   * Archive: the panel's "remove". tsk's command line has no delete, so this takes the task off
+   * every working view and keeps its number and status; `tsk unarchive T<n>` brings it back.
+   */
+  archive(task, cx) {
+    cx.spawn(async (cx) => {
+      const r = await tsk(archiveArgs(task.number));
+      this.say(r.code === 0 ? "ok" : "warn",
+        r.code === 0 ? `T${task.number} archived · tsk unarchive T${task.number} brings it back`
+          : lastLine(r.stderr) || `tsk archive exited ${r.code}`, cx);
+      cx.notify();
+      this.refresh(cx);
+    });
+  }
+
   /** The agent Start runs: props.run (an argv, e.g. ["pi"]), else props.agent by key or name, else the most picked installed one. */
   async agentNow() {
     const p = blockProps() || {};
@@ -260,7 +316,10 @@ export default class Tsk extends View {
     return pickAgent(this.agents, p.agent);
   }
 
-  /** Start: tsk says started, then a coding agent picks it up in a tab of this space, on the task. */
+  /**
+   * Start: tsk says started, then a coding agent runs on it. `hc run` when Herdr's core answers,
+   * the app's own tab otherwise; a launch that fails puts the task back where it was.
+   */
   startTask(task, cx) {
     cx.spawn(async (cx) => {
       const r = await tsk(statusArgs(task.number, "started"));
@@ -275,12 +334,83 @@ export default class Tsk extends View {
       if (!agent) {
         this.say("ok", `T${task.number} started · no coding agent found (set props.agent)`, cx);
       } else {
-        run("tab.new", launchArgs(task, agent));
-        this.say("ok", `T${task.number} started · ${agent.name} is on it`, cx);
+        const launched = await this.launch(task, agent);
+        if (launched.ok) {
+          this.say("ok", `T${task.number} started · ${agent.name} is on it`, cx);
+        } else if (launched.noHc) {
+          run("tab.new", launchArgs(task, agent));
+          this.say("ok", `T${task.number} started · ${agent.name} is on it (no hc: the tab is untracked)`, cx);
+        } else {
+          await tsk(statusArgs(task.number, task.status));
+          this.expect(task, task.status);
+          this.say("warn", `${launched.error} · T${task.number} back to ${LABEL[task.status]}`, cx);
+        }
       }
       cx.notify();
       this.refresh(cx);
     });
+  }
+
+  /**
+   * `hc run` in the background: the terminal outlives this process, carries the task's label, and
+   * joins this space's tab when Herdr knows it — so the panel can find it again after a restart.
+   */
+  async launch(task, agent) {
+    const f = focused();
+    const args = hcRunArgs({
+      task,
+      argv: await this.resolveRun(agent.run),
+      brief: agentBrief(task),
+      folder: task.project || home(),
+      space: f ? f.space : null,
+      tab: f ? f.tab : null,
+    });
+    const r = await hc(args).catch((e) => ({ code: 127, stdout: "", stderr: String((e && e.message) || e) }));
+    if (r.code === 0) return { ok: true };
+    if (r.code === 127) return { ok: false, noHc: true };
+    return { ok: false, error: hcError(r.stderr) || `hc run exited ${r.code}` };
+  }
+
+  /**
+   * `hc` spawns with herdr-core's own environment, which carries neither a login shell's PATH nor
+   * `~/.bun/bin` — an agent Herdr calls installed can still come back "No such file or directory".
+   * So the program is resolved here, where the panel's PATH is the one that found `tsk`, and handed
+   * to `hc` as an absolute path. An argv that already names a path is left alone.
+   */
+  async resolveRun(run) {
+    const argv = (run || []).map(String);
+    const program = argv[0];
+    if (!program || program.includes("/")) return argv;
+    const r = await sh('p=$(command -v "$1" 2>/dev/null) || true; for d in "$HOME/.bun/bin" "$HOME/.local/bin" "$HOME/.npm-global/bin" "$HOME/.cargo/bin" /opt/homebrew/bin /usr/local/bin; do [ -n "$p" ] && break; [ -x "$d/$1" ] && p="$d/$1"; done; printf %s "$p"', [program]);
+    const found = String(r.stdout || "").trim().split("\n").pop();
+    if (found) argv[0] = found;
+    return argv;
+  }
+
+  /** Stop the task's agent terminal, without touching the task's status. */
+  stop(task, cx) {
+    const term = task.term;
+    if (!term) return;
+    cx.spawn(async (cx) => {
+      const r = await hc(["kill", term.address]).catch((e) => ({ code: 1, stdout: "", stderr: String((e && e.message) || e) }));
+      this.say(r.code === 0 ? "ok" : "warn",
+        r.code === 0 ? `T${task.number} · ${term.address} stopped` : hcError(r.stderr) || `hc kill exited ${r.code}`, cx);
+      cx.notify();
+      this.refresh(cx);
+    });
+  }
+
+  /** Bring the agent's terminal forward: its pane when it has one, its peek otherwise. */
+  show(term) {
+    run("terminal.show", { terminal: term.address });
+  }
+
+  /** How often the panel refetches. Remembered per mod copy; clicking a chip refetches at once. */
+  setPoll(ms, cx) {
+    this.poll = ms;
+    try { localStorage.setItem(POLL_KEY, String(ms)); } catch (_e) { /* storage off: the choice lives this run */ }
+    if (ms) this.refresh(cx);
+    else cx.notify();
   }
 
   /** tsk's own board, in a new tab of this space, scoped to that project's folder. */
@@ -312,6 +442,7 @@ export default class Tsk extends View {
       .child(this.header(t, totals, node))
       .child(this.strip(t, totals))
       .child(this.tools(t))
+      .child(this.rate(t))
       .children([this.error ? warnBox(t, this.error) : null].filter(Boolean))
       .child(div().id("projects").flex_1().min_h(0).overflow_y_scrollbar().child(this.list(t, view)))
       .children([this.notice ? this.noticeRow(t) : null].filter(Boolean))
@@ -360,6 +491,18 @@ export default class Tsk extends View {
       .child(secondary("desk-board", "Board", t, () => run("tab.new", { name: "tsk", argv: ["tsk"] }), { h: 28, px: 8 }));
   }
 
+  /** The refetch interval: chips rather than a menu, because the panel is 330px and this is one row. */
+  rate(t) {
+    return h_flex().flex_none().px(10).pb(8).gap(4).items_center()
+      .child(icon("refresh", 11, this.poll ? t.muted : t.dim))
+      .child(div().flex_none().mr(1).text_size(S().label).text_color(t.muted).child("every"))
+      .children(INTERVALS.map((i) => h_flex().id(`poll-${i.ms}`).h(18).px(6).flex_none().items_center().rounded(4)
+        .cursor_pointer().bg(this.poll === i.ms ? t.selected : t.chrome)
+        .text_size(S().label).text_color(this.poll === i.ms ? t.foreground : t.muted)
+        .hover((s) => s.bg(t.hover)).on_mouse_down("left", stop)
+        .on_click((_e, cx) => this.setPoll(i.ms, cx)).child(i.label)));
+  }
+
   list(t, projects) {
     if (!this.refreshed) {
       return v_flex().pt(2).gap(6).children([0, 1, 2].map((i) => div().mx(10).h(46).rounded(8).bg(t.chrome).opacity(1 - i * 0.2)));
@@ -406,23 +549,48 @@ export default class Tsk extends View {
   }
 
   taskRow(t, task) {
-    const open = this.openTask === task.id, hint = taskHint(task);
+    const open = this.openTask === task.id, hint = taskHint(task), term = task.term || null;
+    const id = this.idOf(task.id);
     return v_flex()
-      .child(h_flex().id(`task-${this.idOf(task.id)}`).h(27).pl(27).pr(8).gap(6).items_center().rounded(5).cursor_pointer()
+      .child(h_flex().id(`task-${id}`).h(27).pl(27).pr(8).gap(6).items_center().rounded(5).cursor_pointer()
         .hover((s) => s.bg(open ? t.selected : t.hover)).when(open, (el) => el.bg(t.selected))
         .on_mouse_down("left", stop)
         .on_click((_e, cx) => { this.openTask = open ? null : task.id; cx.notify(); })
         .child(dot(STATUS_COLOR(t, task.status), 6))
         .child(div().w(28).flex_none().text_size(S().label).text_color(t.muted).child(`T${task.number}`))
         .child(div().flex_1().min_w(0).truncate().text_size(S().secondary).child(task.title))
-        .when(task.assignee === "agent", (el) => el.child(icon("bot", 11, t.working)))
-        .when(Boolean(task.thread), (el) => el.child(icon("thread", 11, t.muted))))
+        .when(Boolean(task.assignee) && task.assignee !== "you", (el) => el.child(icon("bot", 11, t.working)))
+        .when(Boolean(term), (el) => el.child(h_flex().id(`term-${id}`).h(16).px(3).gap(3).items_center()
+          .rounded(4).cursor_pointer().hover((s) => s.bg(t.selected)).on_mouse_down("left", stop)
+          .on_click(() => this.show(term))
+          .child(icon("terminal", 11, isLive(term) ? (term.status === "working" ? t.working : t.done) : t.dim))
+          .when(isLive(term) && Boolean(agentName(term)), (el) => el.child(div()
+            .text_size(S().label).text_color(term.status === "working" ? t.working : t.muted)
+            .child(agentName(term))))))
+        .when(Boolean(task.thread), (el) => el.child(icon("thread", 11, t.muted)))
+        .child(h_flex().id(`archive-${id}`).size(16).justify_center().items_center().rounded(4)
+          .cursor_pointer().hover((s) => s.bg(t.selected)).on_mouse_down("left", stop)
+          .on_click((_e, cx) => this.archive(task, cx))
+          .child(icon("archive", 11, t.dim))))
       .when(open, (el) => el.child(h_flex().pl(33).pr(8).pb(6).gap(6).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(S().label).text_color(t.muted).child(hint || LABEL[task.status]))
+        .when(Boolean(term), (el) => el.child(secondary(`go-${id}`, "Open", t, () => this.show(term), { h: 22, px: 7, size: S().label })))
+        .when(isLive(term), (el) => el.child(secondary(`stop-${id}`, "Stop", t, (_e, cx) => this.stop(task, cx),
+          { h: 22, px: 7, size: S().label, color: t.ansi1 })))
         .when(task.status !== "done", (el) => el
-          .when(task.status === "open" || task.status === "ready", (el) => el.child(secondary(`start-${this.idOf(task.id)}`, "Start", t,
-            (_e, cx) => this.startTask(task, cx), { h: 22, px: 7, size: S().label })))
-          .child(secondary(`done-${this.idOf(task.id)}`, "Done", t, (_e, cx) => this.move(task, "done", cx), { h: 22, px: 7, size: S().label })))));
+          .when(task.status === "open" || task.status === "ready" || (task.status === "started" && !isLive(term)),
+            (el) => el.child(secondary(`start-${id}`, isLive(term) ? "Restart" : "Start", t,
+              (_e, cx) => this.startTask(task, cx), { h: 22, px: 7, size: S().label })))
+          .child(secondary(`done-${id}`, "Done", t, (_e, cx) => this.move(task, "done", cx), { h: 22, px: 7, size: S().label }))))
+      // Who is on it and where it runs: the agent's own icon, its name, and the space / tab the
+      // terminal was adopted into — the same label herdr-core gives it in the agent list.
+      .when(open && Boolean(term), (el) => el.child(h_flex().id(`who-${id}`).pl(33).pr(8).pb(6).gap(5).items_center()
+        .rounded(4).cursor_pointer().hover((s) => s.bg(t.hover)).on_mouse_down("left", stop)
+        .on_click(() => this.show(term))
+        .child(programIcon(term, 12, isLive(term) ? (term.status === "working" ? t.working : t.done) : t.dim))
+        .child(div().text_size(S().label).text_color(t.muted).child(whoLine(term)))
+        .when(isLive(term), (row) => row.child(div().text_size(S().label).text_color(t.dim)
+          .child(`· ${term.status === "working" ? "working" : "idle"}`))))));
   }
 
   noticeRow(t) {

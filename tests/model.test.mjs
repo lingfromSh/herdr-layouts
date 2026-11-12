@@ -3,9 +3,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   DONE_MARK, STATUSES, parseList, countsOf, totalsOf, projectName, matchesFolder,
-  buildProjects, filterTasks, filterProjects, idOf, addArgs, statusArgs, boardOf, taskHint, lastLine,
-  agentBrief, pickAgent, launchArgs,
-  snapshotOf, changedTasks, alertPlan, notifyScript,
+  buildProjects, filterTasks, filterProjects, idOf, addArgs, statusArgs, archiveArgs, boardOf, taskHint, lastLine,
+  agentBrief, pickAgent, launchArgs, hcError, agentName, whereLabel, whoLine,
+  snapshotOf, changedTasks, alertPlan, INTERVALS, DEFAULT_POLL, parsePoll, pollLabel,
+  hcRunArgs, taskTerminal, isLive,
 } from "../mods/tsk/model.js";
 
 const task = (number, status, project, more = {}) =>
@@ -128,6 +129,11 @@ test("the two moves the panel offers build the right arguments", () => {
   assert.deepEqual(statusArgs(12, "done"), ["status", "T12", "done"]);
 });
 
+test("archive takes the task number, because tsk's delete is not on the command line", () => {
+  assert.deepEqual(archiveArgs(48), ["archive", "T48"]);
+  assert.deepEqual(archiveArgs(3), ["archive", "T3"]);
+});
+
 test("the board tab is named after its project and opens where tsk scopes it", () => {
   const project = { path: "/w/app", name: "app", desk: false };
   assert.deepEqual(boardOf(project, "/Users/example"), { name: "tsk app", folder: "/w/app" });
@@ -145,6 +151,16 @@ test("taskHint says what waits: a block's reason, review checks, else the thread
 test("lastLine is the last non-empty line, so errors do not print a stack", () => {
   assert.equal(lastLine("a\n\nb  \n"), "b");
   assert.equal(lastLine(undefined), "");
+});
+
+test("hcError unwraps hc's JSON failure, and falls back to the last line", () => {
+  const spawn = '{"error":{"hint":"check the program name and cwd","kind":"spawn_failed","message":"cannot start \\"pi\\": No such file or directory (os error 2)"}}';
+  assert.equal(hcError(spawn), 'cannot start "pi": No such file or directory (os error 2) (check the program name and cwd)');
+  assert.equal(hcError('{"error":{"kind":"x","message":"plain"}}'), "plain");
+  assert.equal(hcError("tsk: unknown task T9"), "tsk: unknown task T9");
+  assert.equal(hcError("noise\n{\"error\":{\"message\":\"boom\"}}"), "boom");
+  assert.equal(hcError(""), "", "nothing to say, so the caller's own message wins");
+  assert.equal(hcError("{not json}"), "{not json}");
 });
 
 test("STATUSES is attention-first, and every one is a tsk status", () => {
@@ -203,19 +219,97 @@ test("a task closed in tsk reads as a move to done, because done rows carry that
   assert.deepEqual(changes.map((c) => [c.task.number, c.to]), [[4, "done"]]);
 });
 
-test("alertPlan: one banner per move, one counted banner when a batch lands", () => {
+test("alertPlan: one notice per move, one counted notice when a batch lands", () => {
   assert.deepEqual(alertPlan([]), []);
   const one = alertPlan([{ task: task(12, "review", "/w/app", { title: "Fix login" }), to: "review" }]);
-  assert.deepEqual(one, [{ title: "tsk · review", body: "app · T12 Fix login" }]);
+  assert.deepEqual(one, [{ title: "tsk · review", body: "app · T12 Fix login", level: "warning" }]);
   assert.equal(alertPlan([{ task: task(5, "open", null), to: "started" }])[0].body, "desk · T5 Task 5");
 
   const many = [1, 2, 3, 4].map((n) => ({ task: task(n, "review", "/w/app"), to: n > 3 ? "done" : "review" }));
-  assert.deepEqual(alertPlan(many), [{ title: "tsk · 4 changed", body: "3 review · 1 done" }]);
+  assert.deepEqual(alertPlan(many), [{ title: "tsk · 4 changed", body: "3 review · 1 done", level: "info" }]);
 });
 
-test("notifyScript quotes the text, goes through System Events, and adds a sound only when asked", () => {
-  assert.equal(notifyScript("tsk · review", 'app · T1 say "hi" \\ bye'),
-    'tell application "System Events" to display notification "app · T1 say \\"hi\\" \\\\ bye" with title "tsk · review"');
-  assert.match(notifyScript("t", "b", "Glass"), / sound name "Glass"$/);
-  assert.doesNotMatch(notifyScript("t", "b", null), /sound name/);
+test("a notice's level follows its status: a block is an error, a done task good news", () => {
+  const level = (to) => alertPlan([{ task: task(1, to, "/w/a"), to }])[0].level;
+  assert.equal(level("blocked"), "error");
+  assert.equal(level("review"), "warning");
+  assert.equal(level("done"), "success");
+  assert.equal(level("started"), "info");
+  assert.equal(level("ready"), "info");
+});
+
+test("the interval: named choices, numbers, and props that name nothing", () => {
+  assert.deepEqual(INTERVALS.map((i) => i.label), ["off", "5s", "15s", "1m", "5m"]);
+  assert.deepEqual(INTERVALS.map((i) => i.ms), [0, 5000, 15000, 60000, 300000]);
+  assert.equal(parsePoll("off"), 0);
+  assert.equal(parsePoll("5s"), 5000);
+  assert.equal(parsePoll("5S "), 5000);
+  assert.equal(parsePoll("60000"), 60000);
+  assert.equal(parsePoll(null), DEFAULT_POLL);
+  assert.equal(parsePoll(""), DEFAULT_POLL);
+  assert.equal(parsePoll("soon"), DEFAULT_POLL);
+  assert.equal(parsePoll("-1"), DEFAULT_POLL);
+  assert.equal(parsePoll(undefined, 0), 0, "props may pass the fallback too");
+  assert.equal(pollLabel(15000), "15s");
+  assert.equal(pollLabel(0), "off");
+  assert.equal(pollLabel(2000), "2s", "an interval that is not on the strip still reads");
+});
+
+test("hcRunArgs: a background terminal, named and labeled for the task, brief last", () => {
+  const args = hcRunArgs({
+    task: task(12, "open", "/w/app"), argv: ["pi"], brief: "do T12",
+    folder: "/w/app", space: "s1", tab: "s1-t2",
+  });
+  assert.deepEqual(args, [
+    "run", "--bg", "--json", "--no-parent", "--keep", "--name", "tsk-12", "--label", "tsk=T12",
+    "--label", "herdr.space=s1", "--label", "herdr.tab=s1-t2", "--cwd", "/w/app", "--", "pi", "do T12",
+  ]);
+  const bare = hcRunArgs({ task: task(7, "open", null), argv: ["codex", "--yolo"] });
+  assert.deepEqual(bare.slice(-3), ["--", "codex", "--yolo"], "no space, no folder, no brief");
+  assert.ok(!bare.includes("--cwd"));
+});
+
+test("taskTerminal finds the label first, then the task's name, and nothing when it is gone", () => {
+  const rows = [
+    { address: "t4", agent: "zsh", state: "live", labels: {} },
+    { address: "t9", agent: "pi", state: "live", status: "working", labels: { tsk: "T12" } },
+    { address: "t11", name: "tsk-13", agent: "claude", state: "finished" },
+  ];
+  const found = taskTerminal(task(12, "started", "/w/app"), rows);
+  assert.equal(found.address, "t9");
+  assert.equal(found.agent, "pi");
+  assert.equal(found.status, "working");
+  assert.equal(found.state, "live");
+  assert.equal(taskTerminal(task(13, "started", "/w/app"), rows).address, "t11", "a launch that never got its label");
+  assert.equal(taskTerminal(task(99, "open", "/w/app"), rows), null);
+  const stale = [
+    { address: "t3", name: "tsk-12", state: "finished", labels: { tsk: "T12" } },
+    { address: "t8", name: "tsk-12", state: "live", labels: { tsk: "T12" } },
+  ];
+  assert.equal(taskTerminal(task(12, "open", "/w/app"), stale).address, "t8",
+    "a finished leftover loses to the run that took its place");
+  assert.equal(taskTerminal(task(12, "open", "/w/app"), null), null);
+});
+
+test("whoLine names the agent and the space / tab herdr-core labeled it with", () => {
+  const row = {
+    address: "t6w", state: "live", status: "working", name: "tsk-54", title: "π - app",
+    labels: { tsk: "T54", where: "Fosun Work / 1" },
+    program: { key: "pi", name: "Pi", icon: "icons/pi.svg", tint: true },
+  };
+  const term = taskTerminal(task(54, "started", "/w/app"), [row]);
+  assert.equal(agentName(term), "Pi", "the program's own name wins");
+  assert.equal(whereLabel(term), "Fosun Work / 1");
+  assert.equal(whoLine(term), "Pi · Fosun Work / 1");
+  assert.deepEqual(term.program, { key: "pi", name: "Pi", icon: "icons/pi.svg", tint: true });
+  assert.equal(whoLine({ program: { key: "codex" }, where: "" }), "codex", "the key when there is no name");
+  assert.equal(whoLine({ name: "tsk-7" }), "tsk-7", "the terminal name when there is no program");
+  assert.equal(whoLine(null), "");
+});
+
+test("isLive is the state, not a status: hc keeps a finished terminal listed", () => {
+  assert.equal(isLive(taskTerminal(task(13, "open", null), [{ address: "t1", name: "tsk-13", state: "finished" }])), false);
+  assert.equal(isLive(taskTerminal(task(13, "open", null), [{ address: "t1", name: "tsk-13", state: "live" }])), true);
+  assert.equal(isLive(null), false);
+  assert.equal(isLive(undefined), false);
 });
