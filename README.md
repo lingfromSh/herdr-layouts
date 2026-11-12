@@ -155,6 +155,20 @@ Pin one in the layout instead:
 
 Without a match the task is only marked started and the notice says so — nothing is silently launched.
 
+### Done ends the task — and asks about the agent's tab
+
+`Done` marks the task done with `tsk status T<n> done`. When the task still has an agent terminal, the row
+asks first, because closing a tab ends **every** terminal in it:
+
+- `Done + close` — the agent's tab goes with the task. If that tab holds only the agent's own terminal
+  (`spaces()` reports the tab's `panes` count), the panel closes it with `tab.close {id, confirmed: true}` and
+  says `T1 done · closed Fosun Work / 1`. In a split tab only the agent's terminal is stopped (`hc kill`) and
+  the notice says `agent stopped, tab kept (2 terminals)`.
+- `Keep` — the task is done and the terminal is left alone; Herdr keeps a finished terminal in its tab.
+- `✕` — nothing happens.
+
+A task with no terminal or no tab is marked done straight away, with no question.
+
 ### A task that moves raises a notification
 
 Every refetch is diffed against the one before it, and each task whose status changed gets one notification:

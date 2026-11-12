@@ -331,6 +331,8 @@ const terminalOf = (row) => ({
   name: row.name ? String(row.name) : "",
   title: row.title ? String(row.title) : "",
   where: row.labels && row.labels.where ? String(row.labels.where) : "",
+  space: row.labels && row.labels["herdr.space"] ? String(row.labels["herdr.space"]) : "",
+  tab: row.labels && row.labels["herdr.tab"] ? String(row.labels["herdr.tab"]) : "",
   program: row.program
     ? {
       key: String(row.program.key || ""),
@@ -360,6 +362,25 @@ export const whereLabel = (term) => (term && term.where ? term.where : "");
 /** `Pi · Fosun Work / 1`: the agent and the tab it sits in, for the row that explains a task. */
 export function whoLine(term) {
   return [agentName(term), whereLabel(term)].filter(Boolean).join(" \u00b7 ");
+}
+
+/**
+ * How many terminals share the tab a task's agent was adopted into. 1 means the tab is the agent's
+ * own, so closing it ends nothing else; more means a split the panel must not take down with it;
+ * 0 means the tab is gone and there is nothing left to close. `spaces()` gives a tab's `panes` as a
+ * count, not a list.
+ */
+export function tabMates(term, spaceList) {
+  if (!term || !term.tab) return 0;
+  const list = Array.isArray(spaceList) ? spaceList : [];
+  for (const space of list) {
+    const tabs = Array.isArray(space && space.tabs) ? space.tabs : [];
+    for (const tab of tabs) {
+      if (!tab || tab.id !== term.tab) continue;
+      return typeof tab.panes === "number" ? tab.panes : 0;
+    }
+  }
+  return 0;
 }
 
 /**

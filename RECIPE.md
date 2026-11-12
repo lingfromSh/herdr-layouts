@@ -75,7 +75,9 @@ Colours are Herdr theme tokens only: `review` = `accent`, `blocked` = `blocked`,
   <project> -- <agent argv...> <brief>`, so the agent runs in its own background terminal, adopted into
   the current tab, carrying the label that lets the panel find it again; `hc` missing falls back to a plain
   `tab.new`, and any other `hc` failure puts the task back to its previous status and says why; `Done` →
-  `tsk status T<n> done`; the archive icon → `tsk archive T<n>`; all refetch on success and print the
+  asks first when the task has an agent terminal (`Done + close` / `Keep` / `✕`), then `tsk status T<n> done`
+  and, on close, `tab.close {id, confirmed: true}` for a tab holding only that terminal or `hc kill` for a
+  split; the archive icon → `tsk archive T<n>`; all refetch on success and print the
   command's own error text on failure.
 - Typing: the filter narrows projects and tasks as you type; the capture input adds a task on Enter
   (`tsk add -t <title>`, plus `-p <path>` or `--desk`), and Escape clears the filter. The panel has no
@@ -168,6 +170,11 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
   name only the fallback. Labels are what `terminals()` exposes, which is why no address is stored anywhere.
 - Herdr lists a terminal while it lives and drops it when it exits, so the chip marks "an agent is on this
   now", not "ever started"; a task left `started` with no chip therefore offers `Start` again.
+- `tab.close` ends **every** terminal in the tab, so `Done` never closes one unasked: the row asks
+  `Done — close its tab too?` whenever the task has a terminal. A tab's terminal count comes from
+  `spaces()[i].tabs[j].panes`, which is a **number**, not a `terminals` array (tab keys: `id, index, name,
+  named, active, status, panes, zoomed, settled, settled_at, changed_at, working_since`); `1` means the
+  agent's own tab and it goes with the task, `>1` means a split and only the agent's terminal is killed.
 - The brief is the agent's **last argv argument**, the same shape tsk's own `dispatch` uses: once you
   configure an `[agent.<name>]` profile in `~/.tsk/config.toml` and upgrade to tsk ≥0.13, let `tsk status
   T<n> started` do the dispatch (worktree, branch, prompt) and keep this panel's `hc run` for setups without
@@ -187,7 +194,7 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
 
 ## Done when
 
-- `herdr-app check mods/tsk` prints `check passed: mods/tsk` and `node --test tests/` passes (30 tests).
+- `herdr-app check mods/tsk` prints `check passed: mods/tsk` and `node --test tests/` passes (31 tests).
 - `herdr-app do layout.switch '{"name":"herdr-work"}'` shows two columns: terminal, tsk, with the button at
   the right end of the tab bar and 8px of space after it.
 - The panel lists the project your active space sits in first, unfolded, with the rest below; the header

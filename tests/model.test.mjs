@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   DONE_MARK, STATUSES, parseList, countsOf, totalsOf, projectName, matchesFolder,
   buildProjects, filterTasks, filterProjects, idOf, addArgs, statusArgs, archiveArgs, boardOf, taskHint, lastLine,
-  agentBrief, pickAgent, launchArgs, hcError, agentName, whereLabel, whoLine,
+  agentBrief, pickAgent, launchArgs, hcError, agentName, whereLabel, whoLine, tabMates,
   snapshotOf, changedTasks, alertPlan, INTERVALS, DEFAULT_POLL, parsePoll, pollLabel,
   hcRunArgs, taskTerminal, isLive,
 } from "../mods/tsk/model.js";
@@ -305,6 +305,26 @@ test("whoLine names the agent and the space / tab herdr-core labeled it with", (
   assert.equal(whoLine({ program: { key: "codex" }, where: "" }), "codex", "the key when there is no name");
   assert.equal(whoLine({ name: "tsk-7" }), "tsk-7", "the terminal name when there is no program");
   assert.equal(whoLine(null), "");
+});
+
+test("tabMates counts the terminals Done would end with the tab", () => {
+  const term = taskTerminal(task(54, "started", "/w/app"), [{
+    address: "t6w", state: "live", name: "tsk-54",
+    labels: { tsk: "T54", "herdr.space": "sp1", "herdr.tab": "tb1", where: "Fosun Work / 1" },
+  }]);
+  assert.equal(term.tab, "tb1");
+  assert.equal(term.space, "sp1");
+  const spaces = [
+    { id: "sp1", tabs: [
+      { id: "tb1", panes: 1 },
+      { id: "tb2", panes: 2 },
+    ] },
+  ];
+  assert.equal(tabMates(term, spaces), 1, "the agent's own tab");
+  assert.equal(tabMates({ ...term, tab: "tb2" }, spaces), 2, "a split keeps its other terminal");
+  assert.equal(tabMates({ ...term, tab: "tb9" }, spaces), 0, "the tab is gone");
+  assert.equal(tabMates(null, spaces), 0);
+  assert.equal(tabMates(term, null), 0);
 });
 
 test("isLive is the state, not a status: hc keeps a finished terminal listed", () => {

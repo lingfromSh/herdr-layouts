@@ -16,7 +16,7 @@ import {
 import {
   STATUSES, LABEL, LIST, PATHS, parseList, lastLine, buildProjects, totalsOf, filterTasks,
   filterProjects, idOf, addArgs, statusArgs, archiveArgs, boardOf, taskHint, pickAgent, launchArgs, agentBrief, hcError,
-  agentName, whereLabel, whoLine,
+  agentName, whereLabel, whoLine, tabMates,
   snapshotOf, changedTasks, alertPlan, INTERVALS, parsePoll, hcRunArgs, taskTerminal, isLive,
 } from "./model.js";
 
@@ -137,6 +137,7 @@ export default class Tsk extends View {
     this.agents = null; // knownAgents() once: the coding agents Start may run
     this.expanded = new Set();
     this.openTask = null;
+    this.confirm = null; // the row asking whether Done should close the agent's tab
     this.notice = null;
     this.noticeAt = 0;
     this.query = "";
@@ -280,17 +281,6 @@ export default class Tsk extends View {
     });
   }
 
-  move(task, status, cx) {
-    cx.spawn(async (cx) => {
-      const r = await tsk(statusArgs(task.number, status));
-      if (r.code === 0) this.expect(task, status);
-      this.say(r.code === 0 ? "ok" : "warn",
-        r.code === 0 ? `T${task.number} ${LABEL[status]}` : lastLine(r.stderr) || `tsk status exited ${r.code}`, cx);
-      cx.notify();
-      this.refresh(cx);
-    });
-  }
-
   /**
    * Archive: the panel's "remove". tsk's command line has no delete, so this takes the task off
    * every working view and keeps its number and status; `tsk unarchive T<n>` brings it back.
@@ -388,6 +378,50 @@ export default class Tsk extends View {
   }
 
   /** Stop the task's agent terminal, without touching the task's status. */
+  // Done on a task whose agent has a tab asks first. Closing the tab is the tidy end — Herdr keeps a
+  // finished terminal in its tab otherwise — but a tab can hold a split, so the panel never closes
+  // one without being told to.
+  done(task, cx) {
+    const term = task.term;
+    if (!term || !term.tab) {
+      this.finish(task, "keep", cx);
+      return;
+    }
+    this.confirm = this.idOf(task.id);
+    cx.notify();
+  }
+
+  finish(task, how, cx) {
+    const term = task.term;
+    this.confirm = null;
+    cx.spawn(async (cx) => {
+      const r = await tsk(statusArgs(task.number, "done"));
+      if (r.code !== 0) {
+        this.say("warn", lastLine(r.stderr) || `tsk status exited ${r.code}`, cx);
+        cx.notify();
+        this.refresh(cx);
+        return;
+      }
+      this.expect(task, "done");
+      let text = `T${task.number} ${LABEL.done}`;
+      if (how === "close" && term && term.tab) {
+        const mates = tabMates(term, spaces());
+        if (mates === 1) {
+          run("tab.close", { id: term.tab, confirmed: true });
+          text = `T${task.number} ${LABEL.done} \u00b7 closed ${whereLabel(term) || "its tab"}`;
+        } else {
+          const k = await hc(["kill", term.address]).catch((e) => ({ code: 1, stderr: String((e && e.message) || e) }));
+          text = k.code === 0
+            ? `T${task.number} ${LABEL.done} \u00b7 agent stopped, tab kept (${mates} terminals)`
+            : `T${task.number} ${LABEL.done} \u00b7 ${hcError(k.stderr) || "could not stop the agent"}`;
+        }
+      }
+      this.say("ok", text, cx);
+      cx.notify();
+      this.refresh(cx);
+    });
+  }
+
   stop(task, cx) {
     const term = task.term;
     if (!term) return;
@@ -572,16 +606,25 @@ export default class Tsk extends View {
           .cursor_pointer().hover((s) => s.bg(t.selected)).on_mouse_down("left", stop)
           .on_click((_e, cx) => this.archive(task, cx))
           .child(icon("archive", 11, t.dim))))
-      .when(open, (el) => el.child(h_flex().pl(33).pr(8).pb(6).gap(6).items_center()
+      .when(open && this.confirm !== id, (el) => el.child(h_flex().pl(33).pr(8).pb(6).gap(6).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(S().label).text_color(t.muted).child(hint || LABEL[task.status]))
         .when(Boolean(term), (el) => el.child(secondary(`go-${id}`, "Open", t, () => this.show(term), { h: 22, px: 7, size: S().label })))
         .when(isLive(term), (el) => el.child(secondary(`stop-${id}`, "Stop", t, (_e, cx) => this.stop(task, cx),
           { h: 22, px: 7, size: S().label, color: t.ansi1 })))
-        .when(task.status !== "done", (el) => el
-          .when(task.status === "open" || task.status === "ready" || (task.status === "started" && !isLive(term)),
-            (el) => el.child(secondary(`start-${id}`, isLive(term) ? "Restart" : "Start", t,
-              (_e, cx) => this.startTask(task, cx), { h: 22, px: 7, size: S().label })))
-          .child(secondary(`done-${id}`, "Done", t, (_e, cx) => this.move(task, "done", cx), { h: 22, px: 7, size: S().label }))))
+        // Sibling .when calls rather than one nested in the other: each .when builds its own
+        // element tree, and two siblings keep the button list flat and easy to read.
+        .when(task.status !== "done" && (task.status === "open" || task.status === "ready" || (task.status === "started" && !isLive(term))),
+          (el) => el.child(secondary(`start-${id}`, isLive(term) ? "Restart" : "Start", t,
+            (_e, cx) => this.startTask(task, cx), { h: 22, px: 7, size: S().label })))
+        .when(task.status !== "done", (el) => el.child(secondary(`done-${id}`, "Done", t,
+          (_e, cx) => this.done(task, cx), { h: 22, px: 7, size: S().label }))))
+      // Done asks about the tab it would leave behind: the agent's own tab goes with the task, a
+      // split tab keeps its other terminals.
+      .when(open && this.confirm === id, (el) => el.child(h_flex().id(`closeask-${id}`).pl(33).pr(8).pb(6).gap(6).items_center()
+        .child(div().flex_1().min_w(0).text_size(S().label).text_color(t.muted).child("Done \u2014 close its tab too?"))
+        .child(primary(`done-close-${id}`, "Done + close", t, (_e, cx) => this.finish(task, "close", cx), { h: 22, px: 7, size: S().label }))
+        .child(secondary(`done-keep-${id}`, "Keep", t, (_e, cx) => this.finish(task, "keep", cx), { h: 22, px: 7, size: S().label }))
+        .child(secondary(`done-x-${id}`, "\u2715", t, (_e, cx) => { this.confirm = null; cx.notify(); }, { h: 22, px: 6, size: S().label }))))
       // Who is on it and where it runs: the agent's own icon, its name, and the space / tab the
       // terminal was adopted into — the same label herdr-core gives it in the agent list.
       .when(open && Boolean(term), (el) => el.child(h_flex().id(`who-${id}`).pl(33).pr(8).pb(6).gap(5).items_center()
